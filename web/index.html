@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verix Stock – Dashboard</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --card-bg: #161b22;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-dim: #8b949e;
+            --primary: #58a6ff;
+            --success: #238636;
+            --danger: #f85149;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            line-height: 1.5;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Login View */
+        #loginView {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: var(--text-dim);
+            margin-bottom: 32px;
+        }
+
+        /* Dashboard View */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+        }
+
+        .user-info {
+            font-size: 14px;
+            color: var(--text-dim);
+        }
+
+        .logout-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--danger);
+            padding: 4px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .watchlist {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 24px;
+            min-height: 40px;
+        }
+
+        .symbol-chip {
+            background: #21262d;
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 4px 12px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .symbol-chip button {
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+        }
+
+        .symbol-chip button:hover {
+            color: var(--danger);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        input {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: var(--text);
+            outline: none;
+            text-transform: uppercase;
+        }
+
+        input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
+        }
+
+        .btn {
+            background: var(--success);
+            color: white;
+            border: 1px solid rgba(240, 246, 252, 0.1);
+            border-radius: 6px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .btn:hover {
+            background: #2ea043;
+        }
+
+        #message {
+            margin-top: 16px;
+            font-size: 13px;
+            min-height: 20px;
+        }
+
+        .msg-success {
+            color: #3fb950;
+        }
+
+        .msg-error {
+            color: var(--danger);
+        }
+
+        .loading-dots:after {
+            content: ' .';
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+
+        @keyframes dots {
+
+            0%,
+            20% {
+                content: '';
+            }
+
+            40% {
+                content: '.';
+            }
+
+            60% {
+                content: '..';
+            }
+
+            80% {
+                content: '...';
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Login View -->
+        <div id="loginView" class="hidden">
+            <h1>📈 Verix Stock</h1>
+            <p class="subtitle">Đăng nhập bằng Telegram để quản lý Watchlist</p>
+            <div id="tgWidgetContainer"></div>
+        </div>
+
+        <!-- Dashboard View -->
+        <div id="dashboardView" class="hidden">
+            <header>
+                <h1>📈 Verix Stock</h1>
+                <div class="user-info">
+                    <span id="userName"></span>
+                    <button class="logout-btn" onclick="logout()">Đăng xuất</button>
+                </div>
+            </header>
+
+            <div class="card">
+                <h2 class="section-title">Danh sách theo dõi</h2>
+                <div id="watchlist" class="watchlist">
+                    <!-- Chips will appear here -->
+                </div>
+
+                <div class="input-group">
+                    <input type="text" id="symbolInput" placeholder="Nhập mã CP (VD: HPG)" maxlength="10">
+                    <button class="btn" onclick="addSymbol()">Thêm mã</button>
+                </div>
+                <div id="message"></div>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">Hướng dẫn</h2>
+                <p style="font-size: 14px; color: var(--text-dim);">
+                    Mã cổ phiếu bạn thêm tại đây sẽ được hệ thống theo dõi và gửi thông báo tức thì qua Telegram Bot khi
+                    có tin tức hoặc biến động tâm lý quan trọng.
+                </p>
+            </div>
+        </div>
+
+        <div id="initialLoading" style="text-align: center; margin-top: 100px;">
+            <p class="loading-dots">Đang khởi tạo</p>
+        </div>
+    </div>
+
+    <script translate="no">
+        const API_BASE = "";
+        let STATE = {
+            token: localStorage.getItem('verix_auth_token'),
+            chatID: localStorage.getItem('verix_chat_id'),
+            name: localStorage.getItem('verix_user_name'),
+            symbols: []
+        };
+
+        // UI Elements
+        const el = {
+            loginView: document.getElementById('loginView'),
+            dashboardView: document.getElementById('dashboardView'),
+            initialLoading: document.getElementById('initialLoading'),
+            userName: document.getElementById('userName'),
+            watchlist: document.getElementById('watchlist'),
+            symbolInput: document.getElementById('symbolInput'),
+            message: document.getElementById('message'),
+            tgWidget: document.getElementById('tgWidgetContainer')
+        };
+
+        async function init() {
+            if (STATE.token && STATE.chatID) {
+                showDashboard();
+            } else {
+                await showLogin();
+            }
+            el.initialLoading.classList.add('hidden');
+        }
+
+        async function showLogin() {
+            el.loginView.classList.remove('hidden');
+            el.dashboardView.classList.add('hidden');
+
+            try {
+                const res = await fetch(`${API_BASE}/auth/bot`);
+                const data = await res.json();
+
+                // Inject Telegram Widget
+                const script = document.createElement('script');
+                script.async = true;
+                script.src = "https://telegram.org/js/telegram-widget.js?22";
+                script.setAttribute('data-telegram-login', data.username);
+                script.setAttribute('data-size', 'large');
+                script.setAttribute('data-onauth', 'onTelegramAuth(user)');
+                script.setAttribute('data-request-access', 'write');
+                el.tgWidget.appendChild(script);
+            } catch (err) {
+                console.error("Failed to load bot config", err);
+            }
+        }
+
+        // Callback from Telegram Widget
+        window.onTelegramAuth = async function (user) {
+            try {
+                el.initialLoading.classList.remove('hidden');
+                el.loginView.classList.add('hidden');
+
+                const res = await fetch(`${API_BASE}/auth/telegram`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(user)
+                });
+
+                if (!res.ok) throw new Error("Auth failed");
+                const data = await res.json();
+
+                localStorage.setItem('verix_auth_token', data.token);
+                localStorage.setItem('verix_chat_id', data.chat_id);
+                localStorage.setItem('verix_user_name', data.name);
+
+                STATE.token = data.token;
+                STATE.chatID = data.chat_id;
+                STATE.name = data.name;
+
+                showDashboard();
+            } catch (err) {
+                alert("Đăng nhập thất bại: " + err.message);
+                showLogin();
+            } finally {
+                el.initialLoading.classList.add('hidden');
+            }
+        };
+
+        async function showDashboard() {
+            el.loginView.classList.add('hidden');
+            el.dashboardView.classList.remove('hidden');
+            el.userName.textContent = STATE.name;
+            await fetchWatchlist();
+        }
+
+        async function fetchWatchlist() {
+            try {
+                const res = await fetch(`${API_BASE}/config/${STATE.chatID}`, {
+                    headers: { 'Authorization': `Bearer ${STATE.token}` }
+                });
+                if (res.status === 401) return logout();
+                const data = await res.json();
+                STATE.symbols = data.symbols || [];
+                renderWatchlist();
+            } catch (err) {
+                console.error("Scale to fetch config", err);
+            }
+        }
+
+        function renderWatchlist() {
+            el.watchlist.innerHTML = '';
+            if (STATE.symbols.length === 0) {
+                el.watchlist.innerHTML = '<p style="font-size: 13px; color: var(--text-dim);">Chưa có mã nào.</p>';
+                return;
+            }
+            STATE.symbols.forEach(symbol => {
+                const chip = document.createElement('div');
+                chip.className = 'symbol-chip';
+                chip.innerHTML = `
+                    <span>${symbol}</span>
+                    <button onclick="removeSymbol('${symbol}')">&times;</button>
+                `;
+                el.watchlist.appendChild(chip);
+            });
+        }
+
+        async function addSymbol() {
+            const sym = el.symbolInput.value.trim().toUpperCase();
+            if (!sym || STATE.symbols.includes(sym)) return;
+
+            STATE.symbols.push(sym);
+            await syncWatchlist();
+            el.symbolInput.value = '';
+        }
+
+        async function removeSymbol(sym) {
+            STATE.symbols = STATE.symbols.filter(s => s !== sym);
+            await syncWatchlist();
+        }
+
+        async function syncWatchlist() {
+            showMessage("Đang đồng bộ...", "success");
+            try {
+                const res = await fetch(`${API_BASE}/config`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${STATE.token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        chat_id: parseInt(STATE.chatID),
+                        symbols: STATE.symbols
+                    })
+                });
+
+                if (res.ok) {
+                    renderWatchlist();
+                    showMessage("Đã đồng bộ thành công!", "success");
+                } else {
+                    const error = await res.json();
+                    showMessage(error.error || "Lỗi đồng bộ", "error");
+                }
+            } catch (err) {
+                showMessage("Lỗi kết nối", "error");
+            }
+        }
+
+        function showMessage(text, type) {
+            el.message.textContent = text;
+            el.message.className = type === 'error' ? 'msg-error' : 'msg-success';
+            setTimeout(() => { if (el.message.textContent === text) el.message.textContent = ''; }, 3000);
+        }
+
+        function logout() {
+            localStorage.clear();
+            location.reload();
+        }
+
+        el.symbolInput.addEventListener('keydown', e => { if (e.key === 'Enter') addSymbol(); });
+
+        init();
+    </script>
+</body>
+
+</html>
