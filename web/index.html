@@ -253,7 +253,7 @@
     </div>
 
     <script translate="no">
-        const API_BASE = "";
+        const BASE_URL = window.location.pathname.replace(/\/+$/, ''); // Handle /stock base path
         let STATE = {
             token: localStorage.getItem('verix_auth_token'),
             chatID: localStorage.getItem('verix_chat_id'),
@@ -287,7 +287,7 @@
             el.dashboardView.classList.add('hidden');
 
             try {
-                const res = await fetch(`${API_BASE}/auth/bot`);
+                const res = await fetch(`${BASE_URL}/auth/bot`);
                 const data = await res.json();
 
                 // Inject Telegram Widget
@@ -310,7 +310,7 @@
                 el.initialLoading.classList.remove('hidden');
                 el.loginView.classList.add('hidden');
 
-                const res = await fetch(`${API_BASE}/auth/telegram`, {
+                const res = await fetch(`${BASE_URL}/auth/telegram`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(user)
@@ -345,7 +345,7 @@
 
         async function fetchWatchlist() {
             try {
-                const res = await fetch(`${API_BASE}/config/${STATE.chatID}`, {
+                const res = await fetch(`${BASE_URL}/config/${STATE.chatID}`, {
                     headers: { 'Authorization': `Bearer ${STATE.token}` }
                 });
                 if (res.status === 401) return logout();
@@ -391,7 +391,7 @@
         async function syncWatchlist() {
             showMessage("Đang đồng bộ...", "success");
             try {
-                const res = await fetch(`${API_BASE}/config`, {
+                const res = await fetch(`${BASE_URL}/config`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${STATE.token}`,
