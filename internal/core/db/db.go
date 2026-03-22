@@ -11,7 +11,7 @@ import (
 
 var DB *gorm.DB
 
-func InitDB() {
+func InitDB() *gorm.DB {
 	dsn := os.Getenv("SUPABASE_DB_URL")
 	if dsn == "" {
 		log.Fatal("SUPABASE_DB_URL is not set in environment")
@@ -24,4 +24,5 @@ func InitDB() {
 	}
 
 	fmt.Println("🚀 Database connected successfully")
+	return DB
 }

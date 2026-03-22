@@ -10,7 +10,8 @@ Verix Stock addresses the pain points of modern investors (User Persona: F0) suc
 
 - **Multi-threaded Scraping**: High-performance Go-based worker for real-time news collection from various sources.
 - **AI-Powered Insights**: Integrates with Gemini API to provide concise summaries and sentiment scoring (Positive/Negative).
-- **Intelligent Deduplication**: Ensures each news piece is processed and summarized only once, optimizing costs and resources.
+- **Intelligent Deduplication**: Sử dụng Hash nội dung hoặc URL để đảm bảo 10 người cùng xem HPG thì chỉ tóm tắt 1 lần duy nhất, tối ưu chi phí AI và tài nguyên database.
+- **Task Scheduling**: Uses `gocron` for reliable, scheduled background tasks (scrapers, scheduled alerts).
 - **Telegrambot Integration**:
   - **Auth**: Simplified login via Telegram Login Widget.
   - **Alerts**: Instant "Push" notifications when sentiment scores for watched stocks fluctuate significantly.

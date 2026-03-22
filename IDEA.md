@@ -10,6 +10,7 @@
 - **Cơ chế**: Quét đa luồng (Goroutines) các đầu báo chính thống.
 - **AI Integration**: Sử dụng Gemini API để tóm tắt bài báo thành 3 gạch đầu dòng và chấm điểm Sentiment (Tích cực/Tiêu cực).
 - **Deduplication**: Sử dụng Hash nội dung hoặc URL để đảm bảo 10 người cùng xem HPG thì chỉ tóm tắt 1 lần duy nhất, tối ưu chi phí AI và tài nguyên database.
+- **Scheduling**: Sử dụng `gocron` để quản lý các tác vụ lặp lại (ví dụ: quét tin tức mỗi 5 phút, gửi báo cáo hàng ngày qua Telegram).
 
 ### B. Tầng Quản trị & Auth (The Admin Host - Go API)
 - **Auth**: Sử dụng Telegram Login Widget. Đây là cách tối ưu cho F0 vì họ không cần nhớ mật khẩu, chỉ cần một nút nhấn là xong.
