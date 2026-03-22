@@ -1,0 +1,19 @@
+{
+  "document-synchronizer": {
+    "type": "guardrail",
+    "enforcement": "suggest",
+    "priority": "high",
+    "promptTriggers": {
+      "keywords": [
+        "implemented",
+        "finished",
+        "complete",
+        "code changes",
+        "refactored"
+      ],
+      "intentPatterns": [
+        "(implement|modify|update|finished).*?(code|logic|feature|refactor)"
+      ]
+    }
+  }
+}
