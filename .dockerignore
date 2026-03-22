@@ -4,3 +4,5 @@ api/
 docs/
 /tmp
 *.log
+.idea/
+documents/
