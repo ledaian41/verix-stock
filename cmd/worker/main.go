@@ -15,6 +15,7 @@ import (
 	"github.com/ledaian41/verix-stock/internal/core/db"
 	"github.com/ledaian41/verix-stock/internal/core/events"
 	"github.com/ledaian41/verix-stock/internal/modules/article"
+	"github.com/ledaian41/verix-stock/internal/modules/watchlist"
 	"github.com/ledaian41/verix-stock/internal/worker"
 	"github.com/ledaian41/verix-stock/internal/worker/jobs"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -44,28 +45,24 @@ func main() {
 	sched := worker.NewScheduler(10, logger)
 
 	articleRepo := article.NewRepository(database)
-	articleFetchJob := jobs.NewArticleFetchJob(articleRepo, pubsub, rdb, logger)
+	watchlistRepo := watchlist.NewRepository(database)
+	articleFetchJob := jobs.NewArticleFetchJob(articleRepo, watchlistRepo, pubsub, rdb, logger)
 
-	// Register job to run every 30 minutes
-	// Note: Expression "0 */30 * * * *" is forrobfig/cron with seconds enabled
+	// Register job to run twice daily during business days (Mon-Fri)
+	// 1. Morning fetch at 08:00
 	_ = sched.Register(worker.JobEntry{
 		Job:      articleFetchJob,
-		Expr:     "0 */30 * * * *",
+		Expr:     "0 0 8 * * 1-5",
 		Timeout:  10 * time.Minute,
 		MaxRetry: 2,
 	})
 
-	// Test Cron Tasks (Telegram)
-	// Task 1: Runs at 22:47:00
-	sched.Register(worker.JobEntry{
-		Job:  &jobs.TelegramTestJob{NameSuffix: "task_1"},
-		Expr: "0 57 22 * * *",
-	})
-
-	// Task 2: Runs at 22:50:00
-	sched.Register(worker.JobEntry{
-		Job:  &jobs.TelegramTestJob{NameSuffix: "task_2"},
-		Expr: "0 58 22 * * *",
+	// 2. Afternoon fetch at 15:00
+	_ = sched.Register(worker.JobEntry{
+		Job:      articleFetchJob,
+		Expr:     "0 0 15 * * 1-5",
+		Timeout:  10 * time.Minute,
+		MaxRetry: 2,
 	})
 
 	// 3. Health & Metrics endpoints
@@ -76,9 +73,9 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		// Readiness: fail if specific job hasn't run successfully in > 90 min
+		// Readiness: fail if specific job hasn't run successfully in > 24 hours
 		lastRun := sched.LastJobRun("article_fetch")
-		if !lastRun.IsZero() && time.Since(lastRun) > 90*time.Minute {
+		if !lastRun.IsZero() && time.Since(lastRun) > 24*time.Hour {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprintf(w, "stale_job: last success was %v ago", time.Since(lastRun))
 			return

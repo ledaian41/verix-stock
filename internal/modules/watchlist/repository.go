@@ -41,3 +41,11 @@ func (r *Repository) Upsert(cfg *StockConfig) (bool, error) {
 func (r *Repository) Delete(chatID int64) error {
 	return r.db.Where("chat_id = ?", chatID).Delete(&StockConfig{}).Error
 }
+
+// GetAllUniqueSymbols retrieves all unique symbols from all StockConfigs.
+func (r *Repository) GetAllUniqueSymbols() ([]string, error) {
+	var symbols []string
+	// Use unnest in PostgreSQL to get all symbols as a flat list
+	err := r.db.Raw("SELECT DISTINCT unnest(symbols) FROM stock_config").Scan(&symbols).Error
+	return symbols, err
+}

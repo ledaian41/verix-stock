@@ -6,6 +6,7 @@ import (
 
 type Article struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
+	Ticker         string    `gorm:"index;size:20" json:"ticker"`
 	Source         string    `gorm:"index;size:100" json:"source"`
 	SourceURL      string    `gorm:"uniqueIndex" json:"source_url"`
 	Title          string    `gorm:"size:255" json:"title"`
