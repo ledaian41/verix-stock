@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   api:
-    build: .
+    image: ghcr.io/ledaian41/verix-stock:latest
     ports:
       - "${PORT:-8080}:8080"
     env_file: .env
@@ -15,7 +15,7 @@ services:
       - verix-network
 
   worker:
-    build: .
+    image: ghcr.io/ledaian41/verix-stock:latest
     entrypoint: [ "/verix-worker" ]
     env_file: .env
     depends_on:
