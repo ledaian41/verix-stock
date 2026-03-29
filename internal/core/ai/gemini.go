@@ -2,18 +2,25 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
+	"strconv"
+
 	"github.com/google/generative-ai-go/genai"
 	"github.com/ledaian41/verix-stock/internal/modules/article"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
 )
 
 type Synthesizer struct {
-	client *genai.Client
-	model  *genai.GenerativeModel
+	client                 *genai.Client
+	factModel              *genai.GenerativeModel
+	proSynthesisModel      *genai.GenerativeModel
+	fallbackSynthesisModel *genai.GenerativeModel
+	concurrencyLimit       int
 }
 
 func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
@@ -27,13 +34,57 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 		return nil, err
 	}
 
-	model := client.GenerativeModel("gemini-1.5-flash")
-	// Set temperature low for consistent summarization
-	model.SetTemperature(0.2)
+	limitStr := os.Getenv("GEMINI_CONCURRENCY_LIMIT")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 {
+		limit = 5 // Default safe limit
+	}
+
+	// 1. Fact Extraction Model (Flash 2.0)
+	factModel := client.GenerativeModel("gemini-2.0-flash")
+	factModel.SetTemperature(0.1)
+	factModel.ResponseMIMEType = "application/json"
+	factModel.ResponseSchema = &genai.Schema{
+		Type: genai.TypeObject,
+		Properties: map[string]*genai.Schema{
+			"ticker":     {Type: genai.TypeString},
+			"article_id": {Type: genai.TypeInteger},
+			"numbers":    {Type: genai.TypeArray, Items: &genai.Schema{Type: genai.TypeString}},
+			"events":     {Type: genai.TypeArray, Items: &genai.Schema{Type: genai.TypeString}},
+			"risks":      {Type: genai.TypeArray, Items: &genai.Schema{Type: genai.TypeString}},
+			"signal":     {Type: genai.TypeString, Enum: []string{"positive", "neutral", "negative"}},
+		},
+		Required: []string{"ticker", "article_id", "numbers", "events", "risks", "signal"},
+	}
+
+	// Synthesis Result Schema (Shared)
+	synthesisSchema := &genai.Schema{
+		Type: genai.TypeObject,
+		Properties: map[string]*genai.Schema{
+			"summary":         {Type: genai.TypeString},
+			"sentiment_score": {Type: genai.TypeNumber},
+		},
+		Required: []string{"summary", "sentiment_score"},
+	}
+
+	// 2. High Quality Synthesis Model (Pro 1.5)
+	proSynthesisModel := client.GenerativeModel("gemini-1.5-pro")
+	proSynthesisModel.SetTemperature(0.1)
+	proSynthesisModel.ResponseMIMEType = "application/json"
+	proSynthesisModel.ResponseSchema = synthesisSchema
+
+	// 3. Fallback Synthesis Model (Flash 2.0)
+	fallbackSynthesisModel := client.GenerativeModel("gemini-2.0-flash")
+	fallbackSynthesisModel.SetTemperature(0.1)
+	fallbackSynthesisModel.ResponseMIMEType = "application/json"
+	fallbackSynthesisModel.ResponseSchema = synthesisSchema
 
 	return &Synthesizer{
-		client: client,
-		model:  model,
+		client:                 client,
+		factModel:              factModel,
+		proSynthesisModel:      proSynthesisModel,
+		fallbackSynthesisModel: fallbackSynthesisModel,
+		concurrencyLimit:       limit,
 	}, nil
 }
 
@@ -41,64 +92,184 @@ func (s *Synthesizer) Close() {
 	s.client.Close()
 }
 
+type FactResult struct {
+	Ticker    string   `json:"ticker"`
+	ArticleID uint     `json:"article_id"`
+	Numbers   []string `json:"numbers"`
+	Events    []string `json:"events"`
+	Risks     []string `json:"risks"`
+	Signal    string   `json:"signal"`
+}
+
 type SynthesisResult struct {
 	Summary        string
 	SentimentScore float64
 }
 
+// Synthesize implements the smart routing logic
 func (s *Synthesizer) Synthesize(ctx context.Context, ticker string, drafts []article.DraftArticle) (*SynthesisResult, error) {
-	if len(drafts) == 0 {
-		return nil, fmt.Errorf("no articles to synthesize")
+	if len(drafts) <= 3 {
+		return s.synthesizeDirect(ctx, ticker, drafts)
 	}
+	return s.synthesizeTwoStage(ctx, ticker, drafts)
+}
 
+func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, drafts []article.DraftArticle) (*SynthesisResult, error) {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Analyze and synthesize the following news articles for stock ticker %s into a concise summary.\n\n", ticker))
-	sb.WriteString("Requirements:\n")
-	sb.WriteString("1. Provide a 3-5 bullet point summary of the key market-moving information.\n")
-	sb.WriteString("2. Provide a sentiment score between -1.0 (Very Negative) and 1.0 (Very Positive).\n")
-	sb.WriteString("3. Response format: [SUMMARY]\n<bulltets>\n[SENTIMENT]\n<score>\n\n")
+	sb.WriteString(fmt.Sprintf("Hành động như một chuyên gia phân tích tài chính cao cấp. Hãy tóm tắt các tin tức mới nhất về mã cổ phiếu %s.\n\n", ticker))
+	sb.WriteString("Yêu cầu:\n")
+	sb.WriteString("1. Viết 3-5 gạch đầu dòng cô đọng, chuyên nghiệp.\n")
+	sb.WriteString("2. Nếu có thông tin trái chiều, hãy nêu rõ các quan điểm đối lập.\n")
+	sb.WriteString("3. Đưa ra điểm Sentiment từ -1.0 đến 1.0.\n")
+	sb.WriteString("4. Định dạng phản hồi: JSON với các trường 'summary' và 'sentiment_score'.\n\n")
 
 	for i, d := range drafts {
-		sb.WriteString(fmt.Sprintf("Article %d: %s\n", i+1, d.Title))
-		sb.WriteString(fmt.Sprintf("Content: %s\n\n", d.FullContent))
+		sb.WriteString(fmt.Sprintf("Tin %d: %s\nNội dung: %s\n\n", i+1, d.Title, d.FullContent))
 	}
 
-	resp, err := s.model.GenerateContent(ctx, genai.Text(sb.String()))
+	resp, err := s.proSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
+	if err != nil {
+		// Fallback to Flash if Pro fails/overloaded with basic retry logic or safety check
+		// Check context deadline before fallback
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		resp, err = s.fallbackSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return s.parseResponse(resp), nil
+}
+
+func (s *Synthesizer) synthesizeTwoStage(ctx context.Context, ticker string, drafts []article.DraftArticle) (*SynthesisResult, error) {
+	// Stage 1: Batch Fact Extraction in Parallel with Concurrency Limit
+	g, gCtx := errgroup.WithContext(ctx)
+	results := make([]*FactResult, len(drafts))
+	failCount := 0
+
+	// Semaphore to limit concurrent requests
+	sem := make(chan struct{}, s.concurrencyLimit)
+
+	for i, d := range drafts {
+		i, d := i, d // capture
+		g.Go(func() error {
+			sem <- struct{}{}        // Acquire
+			defer func() { <-sem }() // Release
+
+			f, err := s.extractFacts(gCtx, d)
+			if err != nil {
+				return nil
+			}
+			results[i] = f
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	var facts []FactResult
+	for _, f := range results {
+		if f != nil {
+			facts = append(facts, *f)
+		} else {
+			failCount++
+		}
+	}
+
+	// If more than 50% fail, it's a major issue
+	if failCount > len(drafts)/2 && len(drafts) > 0 {
+		return nil, fmt.Errorf("too many extraction failures (%d/%d)", failCount, len(drafts))
+	}
+
+	// Stage 2: Synthesis with Conflict Handling
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Dưới đây là dữ liệu thô đã trích xuất từ %d bài báo về mã %s.\n", len(facts), ticker))
+	sb.WriteString("Hãy hành động như một chuyên gia phân tích tài chính để tổng hợp thành bản tin cuối cùng.\n\n")
+	sb.WriteString("QUY TẮC XỬ LÝ MÂU THUẪN:\n")
+	sb.WriteString("- Nếu các nguồn tin đưa ra số liệu hoặc nhận định trái ngược nhau, BẮT BUỘC phải nêu rõ sự đối lập (Ví dụ: 'Mặc dù A... nhưng B...').\n")
+	sb.WriteString("- Ưu tiên các dữ liệu có con số cụ thể.\n\n")
+	sb.WriteString("Yêu cầu đầu ra:\n")
+	sb.WriteString("1. 3-5 gạch đầu dòng tóm tắt tinh hoa.\n")
+	sb.WriteString("2. Điểm Sentiment tổng hợp (-1.0 đến 1.0).\n")
+	sb.WriteString("3. Định dạng phản hồi: JSON với các trường 'summary' và 'sentiment_score'.\n\n")
+
+	factsJSON, err := json.Marshal(facts) // Use compact JSON to save tokens
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal facts: %w", err)
+	}
+	sb.WriteString("DỮ LIỆU TRÍCH XUẤT:\n")
+	sb.WriteString(string(factsJSON))
+
+	resp, err := s.proSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
+	if err != nil {
+		// Fallback to Flash for Stage 2 synthesis
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		resp, err = s.fallbackSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return s.parseResponse(resp), nil
+}
+
+func (s *Synthesizer) extractFacts(ctx context.Context, d article.DraftArticle) (*FactResult, error) {
+	prompt := fmt.Sprintf(`Phân tích bài báo về mã %s. 
+Tiêu đề: %s
+Trích xuất:
+- numbers: CHỈ các con số có giá trị phân tích (%%, tỷ đồng, EPS, PE...). Bỏ ngày tháng thuần túy.
+- events: Sự kiện cụ thể, có thể ảnh hưởng giá (M&A, kết quả kinh doanh, hợp đồng lớn...).
+- risks: Rủi ro được đề cập rõ ràng trong bài.
+- signal: Tone chủ đạo của bài (positive/neutral/negative).
+
+Nội dung bài báo: %s`, d.Ticker, d.Title, d.FullContent)
+	resp, err := s.factModel.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
 		return nil, err
 	}
 
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("empty AI response")
+		return nil, fmt.Errorf("empty response")
 	}
 
-	fullText := ""
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if t, ok := part.(genai.Text); ok {
-			fullText += string(t)
-		}
+	var result FactResult
+	data := []byte(resp.Candidates[0].Content.Parts[0].(genai.Text))
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
 	}
-
-	return parseAIResponse(fullText), nil
+	result.ArticleID = d.ID // Ensure ID is correct
+	return &result, nil
 }
 
-func parseAIResponse(text string) *SynthesisResult {
-	result := &SynthesisResult{
-		Summary:        "Summary extraction failed",
-		SentimentScore: 0.0,
+func (s *Synthesizer) parseResponse(resp *genai.GenerateContentResponse) *SynthesisResult {
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return &SynthesisResult{Summary: "No content generated", SentimentScore: 0}
 	}
 
-	parts := strings.Split(text, "[SENTIMENT]")
-	if len(parts) >= 2 {
-		scoreStr := strings.TrimSpace(parts[1])
-		fmt.Sscanf(scoreStr, "%f", &result.SentimentScore)
-		
-		summaryPart := strings.TrimPrefix(parts[0], "[SUMMARY]")
-		result.Summary = strings.TrimSpace(summaryPart)
-	} else {
-		// Fallback if formatting is weird
-		result.Summary = text
+	part := resp.Candidates[0].Content.Parts[0]
+	text, ok := part.(genai.Text)
+	if !ok {
+		return &SynthesisResult{Summary: "Unexpected response format", SentimentScore: 0}
 	}
 
-	return result
+	var result struct {
+		Summary        string  `json:"summary"`
+		SentimentScore float64 `json:"sentiment_score"`
+	}
+
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		// Fallback for non-JSON or partial JSON (though ResponseSchema should prevent this)
+		return &SynthesisResult{Summary: string(text), SentimentScore: 0}
+	}
+
+	return &SynthesisResult{
+		Summary:        result.Summary,
+		SentimentScore: result.SentimentScore,
+	}
 }
