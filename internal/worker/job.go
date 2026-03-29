@@ -18,3 +18,11 @@ type JobEntry struct {
     Timeout  time.Duration // per-run timeout (default 5m if zero)
     MaxRetry int           // retry on error (0 = no retry)
 }
+// GenericJob allows defining a Job with a simple anonymous function.
+type GenericJob struct {
+	JobName string
+	Action  func(context.Context) error
+}
+
+func (g *GenericJob) Name() string                     { return g.JobName }
+func (g *GenericJob) Run(ctx context.Context) error { return g.Action(ctx) }

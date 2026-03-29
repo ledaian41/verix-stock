@@ -75,18 +75,18 @@ func (j *ArticleFetchJob) Run(ctx context.Context) error {
 		return nil
 	}
 
-	// 2. Prepare ticker map with latest dates
+	// 2. Prepare ticker map with latest dates from Metadata table
 	tickerMap := make(map[string]time.Time)
 	for _, s := range symbols {
-		lastDate, err := j.articleRepo.GetLatestDateForTicker(s)
+		lastDate, err := j.articleRepo.GetLastCrawledAt(s, "CafeF")
 		if err != nil {
-			log.Warn("failed to get latest date for ticker", "ticker", s, "error", err)
+			log.Warn("failed to get latest date from metadata", "ticker", s, "error", err)
 			lastDate = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 		}
 		tickerMap[s] = lastDate
 	}
 
-	// 3. Crawl articles (now with state and pagination)
+	// 3. Crawl articles (now with Deep Extraction from previous change)
 	scraped, err := j.crawler.Crawl(ctx, tickerMap)
 	if err != nil {
 		log.Error("crawling failed", "error", err)
@@ -95,28 +95,41 @@ func (j *ArticleFetchJob) Run(ctx context.Context) error {
 
 	log.Info("scraped articles", "total_count", len(scraped))
 
-	// 4. Save to database
+	// 4. Save to Draft database
 	newCount := 0
+	tickerUpdateMap := make(map[string]time.Time)
+
 	for _, s := range scraped {
-		art := &article.Article{
+		art := &article.DraftArticle{
 			Ticker:      s.TargetTicker,
 			Source:      s.Source,
 			SourceURL:   s.Link,
 			Title:       s.Title,
-			Summary:     s.Description,
+			FullContent: s.FullContent,
 			ContentHash: s.Fingerprint(),
 			PublishedAt: s.PublishedAt,
+			AIStatus:    "pending",
 		}
 
-		if err := j.articleRepo.Create(art); err != nil {
-			log.Warn("failed to save article", "url", s.Link, "error", err)
+		if err := j.articleRepo.CreateDraft(art); err != nil {
+			log.Warn("failed to save draft article", "url", s.Link, "error", err)
 			continue
 		}
 		newCount++
+
+		// Keep track of the most recent article for metadata update
+		if latest, ok := tickerUpdateMap[s.TargetTicker]; !ok || s.PublishedAt.After(latest) {
+			tickerUpdateMap[s.TargetTicker] = s.PublishedAt
+		}
 	}
 
-	log.Info("article_fetch: logic execution completed", "new_articles_saved", newCount)
+	// 5. Update Metadata table
+	for ticker, lastDate := range tickerUpdateMap {
+		if err := j.articleRepo.UpdateLastCrawledAt(ticker, "CafeF", lastDate); err != nil {
+			log.Error("failed to update metadata", "ticker", ticker, "error", err)
+		}
+	}
 
-	log.Info("article_fetch: logic execution completed")
+	log.Info("article_fetch: logic execution completed", "new_drafts_saved", newCount)
 	return nil
 }

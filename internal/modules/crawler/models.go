@@ -12,7 +12,7 @@ type ScrapedArticle struct {
 	Title        string
 	Link         string
 	Description  string    // Optional short description/snippet
-	Content      string    // Full text or main content of the article
+	FullContent  string    // Full body text extracted from the article page
 	Source       string    // e.g., "CafeF", "VnEconomy"
 	PublishedAt  time.Time
 }

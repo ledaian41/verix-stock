@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/ledaian41/verix-stock/internal/core/db"
 	"github.com/ledaian41/verix-stock/internal/core/events"
+	"github.com/ledaian41/verix-stock/internal/core/ai"
 	"github.com/ledaian41/verix-stock/internal/modules/article"
 	"github.com/ledaian41/verix-stock/internal/modules/watchlist"
 	"github.com/ledaian41/verix-stock/internal/worker"
@@ -41,28 +42,59 @@ func main() {
 	}
 	rdb := redis.NewClient(redisOpts)
 
-	// 2. Scheduler & Jobs
+	// 2. AI & Jobs
+	synthesizer, err := ai.NewSynthesizer(context.Background())
+	if err != nil {
+		logger.Error("failed to initialize AI synthesizer", "error", err)
+	} else {
+		defer synthesizer.Close()
+	}
+
 	sched := worker.NewScheduler(10, logger)
 
 	articleRepo := article.NewRepository(database)
 	watchlistRepo := watchlist.NewRepository(database)
+	
 	articleFetchJob := jobs.NewArticleFetchJob(articleRepo, watchlistRepo, pubsub, rdb, logger)
+	aiSummaryJob := jobs.NewAISynthesisJob(articleRepo, synthesizer, rdb, logger)
 
-	// Register job to run twice daily during business days (Mon-Fri)
-	// 1. Morning fetch at 08:00
+	// Register article_fetch job: Morning at 08:00, Afternoon at 15:00
 	_ = sched.Register(worker.JobEntry{
 		Job:      articleFetchJob,
 		Expr:     "0 0 8 * * 1-5",
 		Timeout:  10 * time.Minute,
 		MaxRetry: 2,
 	})
-
-	// 2. Afternoon fetch at 15:00
 	_ = sched.Register(worker.JobEntry{
 		Job:      articleFetchJob,
 		Expr:     "0 0 15 * * 1-5",
 		Timeout:  10 * time.Minute,
 		MaxRetry: 2,
+	})
+
+	// Register ai_synthesis job: 15 mins after fetch
+	_ = sched.Register(worker.JobEntry{
+		Job:      aiSummaryJob,
+		Expr:     "0 15 8 * * 1-5",
+		Timeout:  10 * time.Minute,
+		MaxRetry: 2,
+	})
+	_ = sched.Register(worker.JobEntry{
+		Job:      aiSummaryJob,
+		Expr:     "0 15 15 * * 1-5",
+		Timeout:  10 * time.Minute,
+		MaxRetry: 2,
+	})
+
+	// 3. Daily Cleanup Job (retains 1 year of published articles)
+	_ = sched.Register(worker.JobEntry{
+		Job: &worker.GenericJob{
+			JobName: "published_cleanup",
+			Action: func(ctx context.Context) error {
+				return articleRepo.CleanupOldPublished(365)
+			},
+		},
+		Expr: "0 0 0 * * *", // Every midnight
 	})
 
 	// 3. Health & Metrics endpoints

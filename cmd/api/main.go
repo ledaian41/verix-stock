@@ -82,7 +82,7 @@ func main() {
 	}
 	db.DB = gormDB
 
-	if err := gormDB.AutoMigrate(&article.Article{}, &watchlist.StockConfig{}); err != nil {
+	if err := gormDB.AutoMigrate(&article.DraftArticle{}, &article.PublishedArticle{}, &article.CrawlerMetadata{}, &watchlist.StockConfig{}); err != nil {
 		logger.Error("auto-migrate failed", "error", err)
 		os.Exit(1)
 	}

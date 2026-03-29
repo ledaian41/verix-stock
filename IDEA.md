@@ -7,10 +7,16 @@
 ## 2. Kiến trúc Hệ thống (System Architecture)
 
 ### A. Tầng Thu thập & Xử lý (The Engine - Go CLI Worker)
-- **Cơ chế**: Quét đa luồng (Goroutines) các đầu báo chính thống.
-- **AI Integration**: Sử dụng Gemini API để tóm tắt bài báo thành 3 gạch đầu dòng và chấm điểm Sentiment (Tích cực/Tiêu cực).
-- **Deduplication**: Sử dụng Hash nội dung hoặc URL để đảm bảo 10 người cùng xem HPG thì chỉ tóm tắt 1 lần duy nhất, tối ưu chi phí AI và tài nguyên database.
-- **Scheduling**: Sử dụng `gocron` để quản lý các tác vụ lặp lại (ví dụ: quét tin tức mỗi 5 phút, gửi báo cáo hàng ngày qua Telegram).
+- **Cơ chế**: Quét đa luồng (Goroutines) các đầu báo chính thống. 
+    - **Deep Crawl**: Truy cập vào từng link bài viết để lấy **Toàn văn (Full Content)** thay vì chỉ lấy đoạn trích dẫn ngắn (Sapo), giúp AI có dữ liệu chất lượng cao.
+- **AI Integration**: Sử dụng Gemini API để **Tổng hợp (Synthesize)** các tin tức trong cùng một phiên (Sáng/Chiều) của cùng một mã cổ phiếu thành một bản tin duy nhất (3-5 gạch đầu dòng) kèm điểm số Sentiment.
+- **Deduplication & Optimization**: 
+    - **Transient Drafts**: Lưu tin thô vào bảng `DraftArticle`, sau khi AI tổng hợp xong sẽ xóa sạch để tối ưu database.
+    - **Crawler Metadata**: Sử dụng bảng metadata riêng để lưu mốc thời gian cào tin (`last_crawled_at`), giúp bảng Draft luôn trống và truy vấn cực nhanh.
+- **Scheduling**: Sử dụng `robfig/cron` (v3) để quản lý:
+    - 08:00 & 15:00: Cào tin mới.
+    - 08:15 & 15:15: AI tổng hợp và gửi cảnh báo.
+    - 00:00: Dọn dẹp tin cũ (giữ lại 1 năm).
 
 ### B. Tầng Quản trị & Auth (The Admin Host - Go API)
 - **Auth**: Sử dụng Telegram Login Widget. Đây là cách tối ưu cho F0 vì họ không cần nhớ mật khẩu, chỉ cần một nút nhấn là xong.

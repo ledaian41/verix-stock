@@ -69,12 +69,28 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, ticker string, since time.Time
 			return
 		}
 
+		// Visit the article page to get FULL content
+		fullContent := ""
+		detailCollector := c.Clone()
+		detailCollector.OnHTML(".left_detail, .content_detail, #content", func(de *colly.HTMLElement) {
+			// Remove script and style tags
+			de.DOM.Find("script, style, .social_media, .related_news").Remove()
+			fullContent = strings.TrimSpace(de.Text)
+		})
+		
+		err := detailCollector.Visit(link)
+		if err != nil {
+			// If failed to visit detail, we still keep the article but with empty content
+			// or we can skip it. Let's keep it for now.
+		}
+
 		mu.Lock()
 		articles = append(articles, ScrapedArticle{
 			TargetTicker: ticker,
 			Title:        title,
 			Link:         link,
 			Description:  description,
+			FullContent:  fullContent,
 			Source:       f.name,
 			PublishedAt:  publishedAt,
 		})

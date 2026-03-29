@@ -26,7 +26,7 @@ func (h *Handler) List(c *gin.Context) {
 		limit = 20
 	}
 
-	articles, total, err := h.repo.List(page, limit)
+	articles, total, err := h.repo.ListPublished(page, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -46,7 +46,7 @@ func (h *Handler) GetByID(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-	a, err := h.repo.GetByID(uint(id))
+	a, err := h.repo.GetPublishedByID(uint(id))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "article not found"})
 		return
