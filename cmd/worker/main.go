@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -56,7 +57,28 @@ func main() {
 	watchlistRepo := watchlist.NewRepository(database)
 	
 	articleFetchJob := jobs.NewArticleFetchJob(articleRepo, watchlistRepo, pubsub, rdb, logger)
-	aiSummaryJob := jobs.NewAISynthesisJob(articleRepo, synthesizer, rdb, logger)
+	aiSummaryJob := jobs.NewAISynthesisJob(articleRepo, synthesizer, pubsub, rdb, logger)
+
+	// 3. Realtime Notification Subscriber
+	notifier := article.NewTelegramNotifier()
+	go func() {
+		ctx := context.Background()
+		ch := pubsub.Subscribe(ctx, "article.published")
+		logger.Info("📡 Telegram notification subscriber started")
+		for msg := range ch {
+			var pub article.PublishedArticle
+			if err := json.Unmarshal([]byte(msg.Payload), &pub); err != nil {
+				logger.Error("failed to unmarshal published article event", "error", err)
+				continue
+			}
+
+			if err := notifier.Notify(ctx, pub); err != nil {
+				logger.Error("failed to send telegram notification", "ticker", pub.Ticker, "error", err)
+			} else {
+				logger.Info("✅ Telegram notification sent", "ticker", pub.Ticker)
+			}
+		}
+	}()
 
 	// Register article_fetch job: Morning at 08:00, Afternoon at 15:00
 	_ = sched.Register(worker.JobEntry{
@@ -86,7 +108,7 @@ func main() {
 		MaxRetry: 2,
 	})
 
-	// 3. Daily Cleanup Job (retains 1 year of published articles)
+	// 4. Daily Cleanup Job (retains 1 year of published articles)
 	_ = sched.Register(worker.JobEntry{
 		Job: &worker.GenericJob{
 			JobName: "published_cleanup",
@@ -97,7 +119,7 @@ func main() {
 		Expr: "0 0 0 * * *", // Every midnight
 	})
 
-	// 3. Health & Metrics endpoints
+	// 5. Health & Metrics endpoints
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

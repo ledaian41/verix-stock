@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ledaian41/verix-stock/internal/core/ai"
+	"github.com/ledaian41/verix-stock/internal/core/events"
 	"github.com/ledaian41/verix-stock/internal/modules/article"
 	"github.com/ledaian41/verix-stock/internal/worker"
 	"github.com/redis/go-redis/v9"
@@ -16,6 +17,7 @@ import (
 type AISynthesisJob struct {
 	articleRepo *article.Repository
 	synthesizer *ai.Synthesizer
+	pubsub      events.PubSub
 	rdb         *redis.Client
 	logger      *slog.Logger
 }
@@ -23,12 +25,14 @@ type AISynthesisJob struct {
 func NewAISynthesisJob(
 	articleRepo *article.Repository,
 	synthesizer *ai.Synthesizer,
+	pubsub events.PubSub,
 	rdb *redis.Client,
 	logger *slog.Logger,
 ) *AISynthesisJob {
 	return &AISynthesisJob{
 		articleRepo: articleRepo,
 		synthesizer: synthesizer,
+		pubsub:      pubsub,
 		rdb:         rdb,
 		logger:      logger,
 	}
@@ -91,6 +95,7 @@ func (j *AISynthesisJob) Run(ctx context.Context) error {
 			Ticker:         ticker,
 			Title:          fmt.Sprintf("[%s] %s - %s", ticker, sessionName, time.Now().Format("02/01/2006")),
 			Summary:        res.Summary,
+			Conclusion:     res.Conclusion,
 			SentimentScore: res.SentimentScore,
 			ArticleCount:   len(drafts),
 			Sources:        string(sourcesJSON),
@@ -102,7 +107,13 @@ func (j *AISynthesisJob) Run(ctx context.Context) error {
 			continue
 		}
 
-		// 5. Mark drafts as processed
+		// 5. Emit event for realtime notification
+		payload, _ := json.Marshal(pub)
+		if err := j.pubsub.Publish(ctx, "article.published", payload); err != nil {
+			log.Error("failed to publish event", "ticker", ticker, "error", err)
+		}
+
+		// 6. Mark drafts as processed
 		if err := j.articleRepo.MarkDraftsAsProcessed(draftIDs); err != nil {
 			log.Error("failed to mark drafts as processed", "ticker", ticker, "error", err)
 		}

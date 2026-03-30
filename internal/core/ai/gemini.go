@@ -61,10 +61,11 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 	synthesisSchema := &genai.Schema{
 		Type: genai.TypeObject,
 		Properties: map[string]*genai.Schema{
-			"summary":         {Type: genai.TypeString},
+			"summary":         {Type: genai.TypeString, Description: "3-5 gạch đầu dòng ý chính, mỗi ý 1 dòng"},
+			"conclusion":      {Type: genai.TypeString, Description: "1 câu kết luận ngắn gọn, không kèm icon"},
 			"sentiment_score": {Type: genai.TypeNumber},
 		},
-		Required: []string{"summary", "sentiment_score"},
+		Required: []string{"summary", "conclusion", "sentiment_score"},
 	}
 
 	// 2. High Quality Synthesis Model (Pro 1.5)
@@ -103,6 +104,7 @@ type FactResult struct {
 
 type SynthesisResult struct {
 	Summary        string
+	Conclusion     string
 	SentimentScore float64
 }
 
@@ -118,10 +120,10 @@ func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, draft
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Hành động như một chuyên gia phân tích tài chính cao cấp. Hãy tóm tắt các tin tức mới nhất về mã cổ phiếu %s.\n\n", ticker))
 	sb.WriteString("Yêu cầu:\n")
-	sb.WriteString("1. Viết 3-5 gạch đầu dòng cô đọng, chuyên nghiệp.\n")
-	sb.WriteString("2. Nếu có thông tin trái chiều, hãy nêu rõ các quan điểm đối lập.\n")
+	sb.WriteString("1. Trường 'summary': Viết 3-5 gạch đầu dòng cô đọng, chuyên nghiệp.\n")
+	sb.WriteString("2. Trường 'conclusion': Viết 1 câu chốt ngắn gọn đại diện cho toàn bộ tin tức (không bao gồm emoji 📌).\n")
 	sb.WriteString("3. Đưa ra điểm Sentiment từ -1.0 đến 1.0.\n")
-	sb.WriteString("4. Định dạng phản hồi: JSON với các trường 'summary' và 'sentiment_score'.\n\n")
+	sb.WriteString("4. Định dạng phản hồi: JSON.\n\n")
 
 	for i, d := range drafts {
 		sb.WriteString(fmt.Sprintf("Tin %d: %s\nNội dung: %s\n\n", i+1, d.Title, d.FullContent))
@@ -193,9 +195,10 @@ func (s *Synthesizer) synthesizeTwoStage(ctx context.Context, ticker string, dra
 	sb.WriteString("- Nếu các nguồn tin đưa ra số liệu hoặc nhận định trái ngược nhau, BẮT BUỘC phải nêu rõ sự đối lập (Ví dụ: 'Mặc dù A... nhưng B...').\n")
 	sb.WriteString("- Ưu tiên các dữ liệu có con số cụ thể.\n\n")
 	sb.WriteString("Yêu cầu đầu ra:\n")
-	sb.WriteString("1. 3-5 gạch đầu dòng tóm tắt tinh hoa.\n")
-	sb.WriteString("2. Điểm Sentiment tổng hợp (-1.0 đến 1.0).\n")
-	sb.WriteString("3. Định dạng phản hồi: JSON với các trường 'summary' và 'sentiment_score'.\n\n")
+	sb.WriteString("1. Trường 'summary': 3-5 gạch đầu dòng tóm tắt tinh hoa.\n")
+	sb.WriteString("2. Trường 'conclusion': 1 câu kết luận cô đọng cuối cùng (không bao gồm emoji 📌).\n")
+	sb.WriteString("3. Điểm Sentiment tổng hợp (-1.0 đến 1.0).\n")
+	sb.WriteString("4. Định dạng phản hồi: JSON.\n\n")
 
 	factsJSON, err := json.Marshal(facts) // Use compact JSON to save tokens
 	if err != nil {
@@ -260,16 +263,18 @@ func (s *Synthesizer) parseResponse(resp *genai.GenerateContentResponse) *Synthe
 
 	var result struct {
 		Summary        string  `json:"summary"`
+		Conclusion     string  `json:"conclusion"`
 		SentimentScore float64 `json:"sentiment_score"`
 	}
 
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
-		// Fallback for non-JSON or partial JSON (though ResponseSchema should prevent this)
+		// Fallback for non-JSON or partial JSON
 		return &SynthesisResult{Summary: string(text), SentimentScore: 0}
 	}
 
 	return &SynthesisResult{
 		Summary:        result.Summary,
+		Conclusion:     result.Conclusion,
 		SentimentScore: result.SentimentScore,
 	}
 }

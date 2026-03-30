@@ -26,6 +26,7 @@ type PublishedArticle struct {
 	Ticker         string    `gorm:"index;size:20" json:"ticker"`
 	Title          string    `gorm:"size:255" json:"title"`
 	Summary        string    `gorm:"type:text" json:"summary"`
+	Conclusion     string    `gorm:"type:text" json:"conclusion"`
 	SentimentScore float64   `gorm:"type:decimal(5,2)" json:"sentiment_score"`
 	ArticleCount   int       `json:"article_count"`
 	Sources        string    `gorm:"type:jsonb" json:"sources"` // Store as JSON array of URLs
