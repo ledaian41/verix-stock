@@ -6,14 +6,18 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"strconv"
 
+
 	"github.com/google/generative-ai-go/genai"
 	"github.com/ledaian41/verix-stock/internal/modules/article"
-	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 	"google.golang.org/api/option"
 )
+
+
 
 type Synthesizer struct {
 	client                 *genai.Client
@@ -21,7 +25,9 @@ type Synthesizer struct {
 	proSynthesisModel      *genai.GenerativeModel
 	fallbackSynthesisModel *genai.GenerativeModel
 	concurrencyLimit       int
+	limiter                *rate.Limiter
 }
+
 
 func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
@@ -86,8 +92,10 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 		proSynthesisModel:      proSynthesisModel,
 		fallbackSynthesisModel: fallbackSynthesisModel,
 		concurrencyLimit:       limit,
+		limiter:                rate.NewLimiter(rate.Every(5*time.Second), 1), // 12 RPM
 	}, nil
 }
+
 
 func (s *Synthesizer) Close() {
 	s.client.Close()
@@ -113,8 +121,20 @@ func (s *Synthesizer) Synthesize(ctx context.Context, ticker string, drafts []ar
 	if len(drafts) <= 3 {
 		return s.synthesizeDirect(ctx, ticker, drafts)
 	}
-	return s.synthesizeTwoStage(ctx, ticker, drafts)
+
+	// For legacy compatibility or small batches > 3, we still do two-stage here but sequentially
+	var facts []FactResult
+	for _, d := range drafts {
+		f, err := s.ExtractFact(ctx, d)
+		if err != nil {
+			return nil, err
+		}
+		facts = append(facts, *f)
+	}
+
+	return s.SynthesizeFromFacts(ctx, ticker, facts)
 }
+
 
 func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, drafts []article.DraftArticle) (*SynthesisResult, error) {
 	var sb strings.Builder
@@ -129,12 +149,16 @@ func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, draft
 		sb.WriteString(fmt.Sprintf("Tin %d: %s\nNội dung: %s\n\n", i+1, d.Title, d.FullContent))
 	}
 
+	if err := s.limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
 	resp, err := s.proSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
 	if err != nil {
-		// Fallback to Flash if Pro fails/overloaded with basic retry logic or safety check
-		// Check context deadline before fallback
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if err := s.limiter.Wait(ctx); err != nil {
+			return nil, err
 		}
 		resp, err = s.fallbackSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
 		if err != nil {
@@ -142,52 +166,13 @@ func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, draft
 		}
 	}
 
+
 	return s.parseResponse(resp), nil
 }
 
-func (s *Synthesizer) synthesizeTwoStage(ctx context.Context, ticker string, drafts []article.DraftArticle) (*SynthesisResult, error) {
-	// Stage 1: Batch Fact Extraction in Parallel with Concurrency Limit
-	g, gCtx := errgroup.WithContext(ctx)
-	results := make([]*FactResult, len(drafts))
-	failCount := 0
-
-	// Semaphore to limit concurrent requests
-	sem := make(chan struct{}, s.concurrencyLimit)
-
-	for i, d := range drafts {
-		i, d := i, d // capture
-		g.Go(func() error {
-			sem <- struct{}{}        // Acquire
-			defer func() { <-sem }() // Release
-
-			f, err := s.extractFacts(gCtx, d)
-			if err != nil {
-				return nil
-			}
-			results[i] = f
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	var facts []FactResult
-	for _, f := range results {
-		if f != nil {
-			facts = append(facts, *f)
-		} else {
-			failCount++
-		}
-	}
-
-	// If more than 50% fail, it's a major issue
-	if failCount > len(drafts)/2 && len(drafts) > 0 {
-		return nil, fmt.Errorf("too many extraction failures (%d/%d)", failCount, len(drafts))
-	}
-
+func (s *Synthesizer) SynthesizeFromFacts(ctx context.Context, ticker string, facts []FactResult) (*SynthesisResult, error) {
 	// Stage 2: Synthesis with Conflict Handling
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Dưới đây là dữ liệu thô đã trích xuất từ %d bài báo về mã %s.\n", len(facts), ticker))
 	sb.WriteString("Hãy hành động như một chuyên gia phân tích tài chính để tổng hợp thành bản tin cuối cùng.\n\n")
@@ -207,11 +192,16 @@ func (s *Synthesizer) synthesizeTwoStage(ctx context.Context, ticker string, dra
 	sb.WriteString("DỮ LIỆU TRÍCH XUẤT:\n")
 	sb.WriteString(string(factsJSON))
 
+	if err := s.limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
 	resp, err := s.proSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
 	if err != nil {
-		// Fallback to Flash for Stage 2 synthesis
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if err := s.limiter.Wait(ctx); err != nil {
+			return nil, err
 		}
 		resp, err = s.fallbackSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
 		if err != nil {
@@ -219,10 +209,12 @@ func (s *Synthesizer) synthesizeTwoStage(ctx context.Context, ticker string, dra
 		}
 	}
 
+
 	return s.parseResponse(resp), nil
 }
 
-func (s *Synthesizer) extractFacts(ctx context.Context, d article.DraftArticle) (*FactResult, error) {
+func (s *Synthesizer) ExtractFact(ctx context.Context, d article.DraftArticle) (*FactResult, error) {
+
 	prompt := fmt.Sprintf(`Phân tích bài báo về mã %s. 
 Tiêu đề: %s
 Trích xuất:
@@ -232,20 +224,29 @@ Trích xuất:
 - signal: Tone chủ đạo của bài (positive/neutral/negative).
 
 Nội dung bài báo: %s`, d.Ticker, d.Title, d.FullContent)
+	if err := s.limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
 	resp, err := s.factModel.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("factModel error: %v", err)
 	}
 
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("empty response")
+		return nil, fmt.Errorf("empty factModel candidates")
 	}
 
 	var result FactResult
-	data := []byte(resp.Candidates[0].Content.Parts[0].(genai.Text))
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, err
+	partContent := resp.Candidates[0].Content.Parts[0]
+	text, ok := partContent.(genai.Text)
+	if !ok {
+		return nil, fmt.Errorf("factModel response part 0 is not text: %v", partContent)
 	}
+	data := []byte(text)
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal fact response (%s): %v", string(data), err)
+	}
+
 	result.ArticleID = d.ID // Ensure ID is correct
 	return &result, nil
 }

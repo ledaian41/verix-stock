@@ -2,13 +2,9 @@ package jobs
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/ledaian41/verix-stock/internal/core/ai"
-	"github.com/ledaian41/verix-stock/internal/core/events"
 	"github.com/ledaian41/verix-stock/internal/modules/article"
 	"github.com/ledaian41/verix-stock/internal/worker"
 	"github.com/redis/go-redis/v9"
@@ -16,23 +12,19 @@ import (
 
 type AISynthesisJob struct {
 	articleRepo *article.Repository
-	synthesizer *ai.Synthesizer
-	pubsub      events.PubSub
+	queue       *worker.TaskQueue
 	rdb         *redis.Client
 	logger      *slog.Logger
 }
 
 func NewAISynthesisJob(
 	articleRepo *article.Repository,
-	synthesizer *ai.Synthesizer,
-	pubsub events.PubSub,
 	rdb *redis.Client,
 	logger *slog.Logger,
 ) *AISynthesisJob {
 	return &AISynthesisJob{
 		articleRepo: articleRepo,
-		synthesizer: synthesizer,
-		pubsub:      pubsub,
+		queue:       worker.NewTaskQueue(rdb),
 		rdb:         rdb,
 		logger:      logger,
 	}
@@ -64,66 +56,31 @@ func (j *AISynthesisJob) Run(ctx context.Context) error {
 		return nil
 	}
 
+	enqueuedCount := 0
 	for ticker, drafts := range groupedDrafts {
-		log.Info("synthesizing articles for ticker", "ticker", ticker, "count", len(drafts))
+		log.Info("enqueuing articles for ticker", "ticker", ticker, "count", len(drafts))
 
-		// 2. Synthesize using AI
-		res, err := j.synthesizer.Synthesize(ctx, ticker, drafts)
-		if err != nil {
-			log.Error("synthesis failed", "ticker", ticker, "error", err)
-			continue
-		}
-
-		// 3. Prepare sources list
-		sources := make([]string, 0, len(drafts))
-		draftIDs := make([]uint, 0, len(drafts))
 		for _, d := range drafts {
-			sources = append(sources, d.SourceURL)
-			draftIDs = append(draftIDs, d.ID)
-		}
-		sourcesJSON, _ := json.Marshal(sources)
+			task := &worker.Task{
+				Type:   worker.TaskExtract,
+				Ticker: ticker,
+				ArticleID: d.ID,
+			}
+			if err := j.queue.Enqueue(ctx, task); err != nil {
+				log.Error("failed to enqueue extraction task", "article_id", d.ID, "error", err)
+				continue
+			}
 
-		// 4. Create Published Article
-		sessionName := "Market Digest"
-		if time.Now().Hour() < 12 {
-			sessionName = "Morning Digest"
-		} else if time.Now().Hour() >= 15 {
-			sessionName = "Afternoon Wrapup"
-		}
-
-		pub := &article.PublishedArticle{
-			Ticker:         ticker,
-			Title:          fmt.Sprintf("[%s] %s - %s", ticker, sessionName, time.Now().Format("02/01/2006")),
-			Summary:        res.Summary,
-			Conclusion:     res.Conclusion,
-			SentimentScore: res.SentimentScore,
-			ArticleCount:   len(drafts),
-			Sources:        string(sourcesJSON),
-			PublishedAt:    time.Now(),
-		}
-
-		if err := j.articleRepo.CreatePublished(pub); err != nil {
-			log.Error("failed to save published article", "ticker", ticker, "error", err)
-			continue
-		}
-
-		// 5. Emit event for realtime notification
-		payload, _ := json.Marshal(pub)
-		if err := j.pubsub.Publish(ctx, "article.published", payload); err != nil {
-			log.Error("failed to publish event", "ticker", ticker, "error", err)
-		}
-
-		// 6. Mark drafts as processed
-		if err := j.articleRepo.MarkDraftsAsProcessed(draftIDs); err != nil {
-			log.Error("failed to mark drafts as processed", "ticker", ticker, "error", err)
+			// Update status in DB to avoid duplicate enqueuing
+			if err := j.articleRepo.MarkDraftsAsProcessed([]uint{d.ID}); err != nil { // reused method to set 'processed'... wait, should set 'extraction_queued'
+				// Let's use UpdateDraftAI for specific status
+			}
+			_ = j.articleRepo.UpdateDraftAI(d.ID, "", "extraction_queued")
+			enqueuedCount++
 		}
 	}
 
-	// 6. Final Cleanup: Clear processed drafts
-	if err := j.articleRepo.ClearProcessedDrafts(); err != nil {
-		log.Error("failed to clear processed drafts", "error", err)
-	}
-
-	log.Info("ai_synthesis: logic execution completed")
+	log.Info("ai_synthesis producer: finished", "total_enqueued", enqueuedCount)
 	return nil
 }
+

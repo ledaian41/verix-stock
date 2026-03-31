@@ -57,7 +57,13 @@ func main() {
 	watchlistRepo := watchlist.NewRepository(database)
 	
 	articleFetchJob := jobs.NewArticleFetchJob(articleRepo, watchlistRepo, pubsub, rdb, logger)
-	aiSummaryJob := jobs.NewAISynthesisJob(articleRepo, synthesizer, pubsub, rdb, logger)
+	aiSummaryJob := jobs.NewAISynthesisJob(articleRepo, rdb, logger)
+
+	// 2.5 AI Queue Worker
+	taskQueue := worker.NewTaskQueue(rdb)
+	queueWorker := worker.NewQueueWorker(articleRepo, synthesizer, taskQueue, pubsub, logger)
+	go queueWorker.Start(context.Background())
+
 
 	// 3. Realtime Notification Subscriber
 	notifier := article.NewTelegramNotifier()

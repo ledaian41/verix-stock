@@ -37,8 +37,10 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, ticker string, since time.Time
 
 	c.SetRequestTimeout(30 * time.Second)
 
-	// Regex for CafeF article ID which encodes the date: 188 + YY + MM + DD
-	dateRegex := regexp.MustCompile(`188(\d{2})(\d{2})(\d{2})`)
+	// Regex for CafeF article ID which encodes the date: 188 + YY + MM + DD + HH + mm + ss
+	// Example: 188260331102030 -> 188 + 26 + 03 + 31 + 10 + 20 + 30
+	dateRegex := regexp.MustCompile(`188(\d{2})(\d{2})(\d{2})(\d{2})?(\d{2})?(\d{2})?`)
+	ict := time.FixedZone("ICT", 7*3600)
 
 	c.OnHTML(".timeline .item", func(e *colly.HTMLElement) {
 		title := e.ChildText(".titlehidden a")
@@ -58,7 +60,14 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, ticker string, since time.Time
 			monthStr := matches[2]
 			dayStr := matches[3]
 			
-			t, err := time.Parse("2006-01-02", yearStr+"-"+monthStr+"-"+dayStr)
+			hourStr := "00"
+			minStr := "00"
+			secStr := "00"
+			if matches[4] != "" { hourStr = matches[4] }
+			if matches[5] != "" { minStr = matches[5] }
+			if matches[6] != "" { secStr = matches[6] }
+
+			t, err := time.ParseInLocation("2006-01-02 15:04:05", yearStr+"-"+monthStr+"-"+dayStr+" "+hourStr+":"+minStr+":"+secStr, ict)
 			if err == nil {
 				publishedAt = t
 			}
@@ -106,15 +115,19 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, ticker string, since time.Time
 			searchURL = fmt.Sprintf("https://cafef.vn/tim-kiem/trang-%d.chn?keywords=%s", page, strings.ToUpper(ticker))
 		}
 
+		preFetchCount := len(articles)
 		err := c.Visit(searchURL)
 		if err != nil {
-			// If a page fails, we stop
 			break
 		}
 
-		// If no articles found on this page OR the oldest article on this page is already past 'since',
-		// we could optimize by checking the length of 'articles' before/after.
-		// For simplicity, we just visit 3 pages as requested.
+		// Optimization: if no new articles were added on this page AND we visited some items,
+		// it likely means they were all older than 'since'. We can stop.
+		// Note: 'articles' is appended inside OnHTML.
+		if len(articles) == preFetchCount {
+			// Check if we hit the 'since' limit or just no results
+			break
+		}
 	}
 
 	return articles, nil

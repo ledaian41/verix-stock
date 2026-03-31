@@ -12,10 +12,12 @@ type DraftArticle struct {
 	Title       string    `gorm:"size:255" json:"title"`
 	FullContent string    `gorm:"type:text" json:"full_content"`
 	ContentHash string    `gorm:"uniqueIndex;size:64" json:"-"`
-	AIStatus    string    `gorm:"index;default:'pending';size:20" json:"ai_status"` // pending, processing, processed, failed
+	AIStatus    string    `gorm:"index;default:'pending';size:20" json:"ai_status"` // pending, extraction_queued, extracted, failed
+	AIFacts     string    `gorm:"type:text" json:"ai_facts"`                        // JSON storage for FactResult
 	PublishedAt time.Time `gorm:"index" json:"published_at"`
 	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
 }
+
 
 func (DraftArticle) TableName() string {
 	return "stock_draft_article"

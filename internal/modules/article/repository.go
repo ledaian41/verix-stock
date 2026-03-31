@@ -83,6 +83,41 @@ func (r *Repository) ClearProcessedDrafts() error {
 	return r.db.Where("ai_status = ?", "processed").Delete(&DraftArticle{}).Error
 }
 
+func (r *Repository) UpdateDraftAI(id uint, facts string, status string) error {
+	return r.db.Model(&DraftArticle{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"ai_facts":  facts,
+		"ai_status": status,
+	}).Error
+}
+
+func (r *Repository) GetExtractedDraftsByTicker(ticker string) ([]DraftArticle, error) {
+	var drafts []DraftArticle
+	err := r.db.Where("ticker = ? AND ai_status = ?", ticker, "extracted").Find(&drafts).Error
+	return drafts, err
+}
+
+func (r *Repository) CountIncompleteDraftsByTicker(ticker string) (int64, error) {
+	var count int64
+	err := r.db.Model(&DraftArticle{}).
+		Where("ticker = ? AND ai_status IN ?", ticker, []string{"pending", "extraction_queued"}).
+		Count(&count).Error
+	return count, err
+}
+
+func (r *Repository) GetDraftByID(id uint) (*DraftArticle, error) {
+	var a DraftArticle
+	if err := r.db.First(&a, id).Error; err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (r *Repository) DeleteDraftsByTicker(ticker string) error {
+	return r.db.Where("ticker = ?", ticker).Delete(&DraftArticle{}).Error
+}
+
+
+
 // Published Article Methods
 func (r *Repository) CreatePublished(p *PublishedArticle) error {
 	return r.db.Create(p).Error

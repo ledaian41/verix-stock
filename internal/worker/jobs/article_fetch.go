@@ -77,12 +77,25 @@ func (j *ArticleFetchJob) Run(ctx context.Context) error {
 
 	// 2. Prepare ticker map with latest dates from Metadata table
 	tickerMap := make(map[string]time.Time)
+	now := time.Now()
+	window := 24 * time.Hour
+	if now.Weekday() == time.Monday {
+		window = 72 * time.Hour
+	}
+	sinceThreshold := now.Add(-window)
+
 	for _, s := range symbols {
 		lastDate, err := j.articleRepo.GetLastCrawledAt(s, "CafeF")
 		if err != nil {
 			log.Warn("failed to get latest date from metadata", "ticker", s, "error", err)
-			lastDate = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+			lastDate = sinceThreshold
 		}
+
+		// Ensure we don't crawl older than our window (24h/72h)
+		if lastDate.Before(sinceThreshold) {
+			lastDate = sinceThreshold
+		}
+
 		tickerMap[s] = lastDate
 	}
 
