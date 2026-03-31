@@ -68,6 +68,7 @@ Key variables:
 - `REDIS_URL`: URL for your Redis instance.
 - `PORT`: API server port (default 8080).
 - `GEMINI_API_KEY`: Your Google Gemini API key.
+- `GEMINI_RPM_LIMIT`: Maximum requests per minute (RPM) for Gemini API (Default: 12 for Free Tier).
 
 ### Running with Docker
 

@@ -24,9 +24,10 @@ type Synthesizer struct {
 	factModel              *genai.GenerativeModel
 	proSynthesisModel      *genai.GenerativeModel
 	fallbackSynthesisModel *genai.GenerativeModel
-	concurrencyLimit       int
+	rpmLimit               int
 	limiter                *rate.Limiter
 }
+
 
 
 func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
@@ -40,11 +41,13 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 		return nil, err
 	}
 
-	limitStr := os.Getenv("GEMINI_CONCURRENCY_LIMIT")
-	limit, _ := strconv.Atoi(limitStr)
-	if limit <= 0 {
-		limit = 5 // Default safe limit
+	limitStr := os.Getenv("GEMINI_RPM_LIMIT")
+	rpm, _ := strconv.Atoi(limitStr)
+	if rpm <= 0 {
+		rpm = 12 // Default safe limit for Free Tier (15 RPM)
 	}
+
+
 
 	// 1. Fact Extraction Model (Flash 2.0)
 	factModel := client.GenerativeModel("gemini-2.0-flash")
@@ -91,10 +94,12 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 		factModel:              factModel,
 		proSynthesisModel:      proSynthesisModel,
 		fallbackSynthesisModel: fallbackSynthesisModel,
-		concurrencyLimit:       limit,
-		limiter:                rate.NewLimiter(rate.Every(5*time.Second), 1), // 12 RPM
+		rpmLimit:               rpm,
+		limiter:                rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), 1),
 	}, nil
 }
+
+
 
 
 func (s *Synthesizer) Close() {
