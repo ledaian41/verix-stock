@@ -116,6 +116,17 @@ func (r *Repository) DeleteDraftsByTicker(ticker string) error {
 	return r.db.Where("ticker = ?", ticker).Delete(&DraftArticle{}).Error
 }
 
+func (r *Repository) GetTickersReadyForSynthesis() ([]string, error) {
+	var tickers []string
+	err := r.db.Model(&DraftArticle{}).
+		Select("ticker").
+		Group("ticker").
+		Having("SUM(CASE WHEN ai_status IN ? THEN 1 ELSE 0 END) = 0", []string{"pending", "extraction_queued"}).
+		Having("SUM(CASE WHEN ai_status = ? THEN 1 ELSE 0 END) > 0", "extracted").
+		Pluck("ticker", &tickers).Error
+	return tickers, err
+}
+
 
 
 // Published Article Methods

@@ -46,6 +46,8 @@ func (r *Repository) Delete(chatID int64) error {
 func (r *Repository) GetAllUniqueSymbols() ([]string, error) {
 	var symbols []string
 	// Use unnest in PostgreSQL to get all symbols as a flat list
-	err := r.db.Raw("SELECT DISTINCT unnest(symbols) FROM stock_config").Scan(&symbols).Error
+	err := r.db.Model(&StockConfig{}).
+		Select("DISTINCT unnest(symbols) as symbol").
+		Pluck("symbol", &symbols).Error
 	return symbols, err
 }

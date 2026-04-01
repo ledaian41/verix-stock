@@ -54,6 +54,8 @@ func (w *QueueWorker) Start(ctx context.Context) {
 				continue
 			}
 
+			w.logger.Info("processing task from redis", "type", task.Type, "ticker", task.Ticker, "id", task.ArticleID, "retry", task.Retry)
+
 			if err := w.processTask(ctx, task); err != nil {
 				w.logger.Error("failed to process task", "type", task.Type, "ticker", task.Ticker, "error", err)
 				// Basic retry logic by re-enqueuing with a delay if needed
@@ -61,9 +63,30 @@ func (w *QueueWorker) Start(ctx context.Context) {
 					task.Retry++
 					task.CreatedAt = time.Now().Add(time.Duration(task.Retry) * 10 * time.Second)
 					_ = w.queue.Enqueue(ctx, task)
+				} else {
+					// Terminal failure: Update DB status to failed so it doesn't block synthesis
+					if task.Type == TaskExtract && task.ArticleID > 0 {
+						w.logger.Warn("task exhausted retries, marking as failed in DB", "article_id", task.ArticleID)
+						_ = w.repo.UpdateDraftAI(task.ArticleID, "", "failed")
+						
+						// After marking as failed, we should still check if this ticker's batch is "done"
+						// to trigger synthesis even with failures.
+						w.checkAndTriggerSynthesis(ctx, task.Ticker)
+					}
 				}
 			}
 		}
+	}
+}
+
+func (w *QueueWorker) checkAndTriggerSynthesis(ctx context.Context, ticker string) {
+	incomplete, err := w.repo.CountIncompleteDraftsByTicker(ticker)
+	if err == nil && incomplete == 0 {
+		w.logger.Info("all articles (including failed) processed for ticker, enqueuing synthesis", "ticker", ticker)
+		_ = w.queue.Enqueue(ctx, &Task{
+			Type:   TaskSynthesize,
+			Ticker: ticker,
+		})
 	}
 }
 
@@ -115,6 +138,8 @@ func (w *QueueWorker) handleExtract(ctx context.Context, task *Task, log *slog.L
 			Type:   TaskSynthesize,
 			Ticker: task.Ticker,
 		})
+	} else {
+		log.Info("article processed", "id", d.ID, "remaining_for_ticker", incomplete)
 	}
 
 	return nil
@@ -131,6 +156,8 @@ func (w *QueueWorker) handleSynthesize(ctx context.Context, task *Task, log *slo
 		log.Warn("no extracted drafts found for synthesis", "ticker", task.Ticker)
 		return nil
 	}
+
+	log.Info("starting synthesis for ticker", "ticker", task.Ticker, "articles_count", len(drafts))
 
 	facts := make([]ai.FactResult, 0, len(drafts))
 	sources := make([]string, 0, len(drafts))

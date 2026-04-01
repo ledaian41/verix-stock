@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -29,11 +30,15 @@ type Task struct {
 }
 
 type TaskQueue struct {
-	rdb *redis.Client
+	rdb    *redis.Client
+	logger *slog.Logger
 }
 
-func NewTaskQueue(rdb *redis.Client) *TaskQueue {
-	return &TaskQueue{rdb: rdb}
+func NewTaskQueue(rdb *redis.Client, logger *slog.Logger) *TaskQueue {
+	return &TaskQueue{
+		rdb:    rdb,
+		logger: logger.With("component", "task_queue"),
+	}
 }
 
 func (q *TaskQueue) Enqueue(ctx context.Context, task *Task) error {
@@ -44,7 +49,11 @@ func (q *TaskQueue) Enqueue(ctx context.Context, task *Task) error {
 	if err != nil {
 		return err
 	}
-	return q.rdb.LPush(ctx, TaskQueueKey, data).Err()
+	if err := q.rdb.LPush(ctx, TaskQueueKey, data).Err(); err != nil {
+		return err
+	}
+	q.logger.Debug("task enqueued", "type", task.Type, "ticker", task.Ticker)
+	return nil
 }
 
 func (q *TaskQueue) Dequeue(ctx context.Context) (*Task, error) {
@@ -56,6 +65,8 @@ func (q *TaskQueue) Dequeue(ctx context.Context) (*Task, error) {
 		}
 		return nil, err
 	}
+
+	q.logger.Debug("task dequeued from redis", "raw_len", len(res[1]))
 
 	if len(res) < 2 {
 		return nil, fmt.Errorf("unexpected brpop result length")

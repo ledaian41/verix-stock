@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"log/slog"
@@ -28,6 +29,10 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using OS environments")
 	}
+	
+	jobName := flag.String("job", "", "Run a specific job once and exit")
+	workMode := flag.Bool("work", false, "Run in work-only mode (process extraction/synthesis tasks from queue)")
+	flag.Parse()
 
 	// 1. Core initialization
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -44,7 +49,7 @@ func main() {
 	rdb := redis.NewClient(redisOpts)
 
 	// 2. AI & Jobs
-	synthesizer, err := ai.NewSynthesizer(context.Background())
+	synthesizer, err := ai.NewSynthesizer(context.Background(), logger)
 	if err != nil {
 		logger.Error("failed to initialize AI synthesizer", "error", err)
 	} else {
@@ -60,7 +65,7 @@ func main() {
 	aiSummaryJob := jobs.NewAISynthesisJob(articleRepo, rdb, logger)
 
 	// 2.5 AI Queue Worker
-	taskQueue := worker.NewTaskQueue(rdb)
+	taskQueue := worker.NewTaskQueue(rdb, logger)
 	queueWorker := worker.NewQueueWorker(articleRepo, synthesizer, taskQueue, pubsub, logger)
 	go queueWorker.Start(context.Background())
 
@@ -86,44 +91,63 @@ func main() {
 		}
 	}()
 
-	// Register article_fetch job: Morning at 08:00, Afternoon at 15:00
-	_ = sched.Register(worker.JobEntry{
-		Job:      articleFetchJob,
-		Expr:     "0 0 8 * * 1-5",
-		Timeout:  10 * time.Minute,
-		MaxRetry: 2,
-	})
-	_ = sched.Register(worker.JobEntry{
-		Job:      articleFetchJob,
-		Expr:     "0 0 15 * * 1-5",
-		Timeout:  10 * time.Minute,
-		MaxRetry: 2,
-	})
+	// Check if we should run a specific job and exit
+	if *jobName != "" {
+		logger.Info("Manual job trigger", "job", *jobName)
+		if err := sched.RunJob(*jobName); err != nil {
+			logger.Error("Manual job failed", "job", *jobName, "error", err)
+			os.Exit(1)
+		}
+		logger.Info("Manual job completed successfully", "job", *jobName)
+		return
+	}
 
-	// Register ai_synthesis job: 15 mins after fetch
-	_ = sched.Register(worker.JobEntry{
-		Job:      aiSummaryJob,
-		Expr:     "0 15 8 * * 1-5",
-		Timeout:  10 * time.Minute,
-		MaxRetry: 2,
-	})
-	_ = sched.Register(worker.JobEntry{
-		Job:      aiSummaryJob,
-		Expr:     "0 15 15 * * 1-5",
-		Timeout:  10 * time.Minute,
-		MaxRetry: 2,
-	})
+	if !*workMode {
+		// Register article_fetch job: Morning at 08:00, Afternoon at 15:00
+		_ = sched.Register(worker.JobEntry{
+			Job:      articleFetchJob,
+			Expr:     "0 0 8 * * 1-5",
+			Timeout:  10 * time.Minute,
+			MaxRetry: 2,
+		})
+		_ = sched.Register(worker.JobEntry{
+			Job:      articleFetchJob,
+			Expr:     "0 0 15 * * 1-5",
+			Timeout:  10 * time.Minute,
+			MaxRetry: 2,
+		})
 
-	// 4. Daily Cleanup Job (retains 1 year of published articles)
-	_ = sched.Register(worker.JobEntry{
-		Job: &worker.GenericJob{
-			JobName: "published_cleanup",
-			Action: func(ctx context.Context) error {
-				return articleRepo.CleanupOldPublished(365)
+		// Register ai_synthesis job: 15 mins after fetch
+		_ = sched.Register(worker.JobEntry{
+			Job:      aiSummaryJob,
+			Expr:     "0 15 8 * * 1-5",
+			Timeout:  10 * time.Minute,
+			MaxRetry: 2,
+		})
+		_ = sched.Register(worker.JobEntry{
+			Job:      aiSummaryJob,
+			Expr:     "0 15 15 * * 1-5",
+			Timeout:  10 * time.Minute,
+			MaxRetry: 2,
+		})
+
+		// 4. Daily Cleanup Job (retains 1 year of published articles)
+		_ = sched.Register(worker.JobEntry{
+			Job: &worker.GenericJob{
+				JobName: "published_cleanup",
+				Action: func(ctx context.Context) error {
+					return articleRepo.CleanupOldPublished(365)
+				},
 			},
-		},
-		Expr: "0 0 0 * * *", // Every midnight
-	})
+			Expr: "0 0 0 * * *", // Every midnight
+		})
+
+		// Start Scheduler
+		sched.Start()
+		logger.Info("⛏️  Verix Stock Worker started (Full Mode with Scheduler)")
+	} else {
+		logger.Info("🚀 Verix Stock Worker started (Work-only Mode)")
+	}
 
 	// 5. Health & Metrics endpoints
 	mux := http.NewServeMux()

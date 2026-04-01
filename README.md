@@ -88,6 +88,28 @@ go run cmd/api/main.go
 go run cmd/worker/main.go
 ```
 
+### 🛠 Worker Operational Modes
+
+The worker can be run in different modes depending on your infrastructure needs:
+
+1. **Full Mode (Default)**:
+   Runs everything—Scraper scheduler, AI Synthesis scheduler, and Queue consumers.
+   ```bash
+   go run cmd/worker/main.go
+   ```
+
+2. **Work-only Mode (`--work`)**:
+   Ideal for horizontal scaling. Disables the internal cron scheduler and only processes tasks (AI Extraction/Synthesis) from the Redis queue.
+   ```bash
+   go run cmd/worker/main.go -work
+   ```
+
+3. **Manual Job (`--job`)**:
+   Runs a specific job (e.g., `ai_synthesis` or `article_fetch`) immediately once and then exits.
+   ```bash
+   go run cmd/worker/main.go -job ai_synthesis
+   ```
+
 ## 🗺 Data Flow
 
 1. **Worker (Fetch)**: Quét tin sâu $\rightarrow$ Lưu bản tin thô vào `DraftArticle` $\rightarrow$ Cập nhật `CrawlerMetadata`.

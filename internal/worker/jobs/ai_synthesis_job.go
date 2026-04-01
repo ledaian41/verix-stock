@@ -24,7 +24,7 @@ func NewAISynthesisJob(
 ) *AISynthesisJob {
 	return &AISynthesisJob{
 		articleRepo: articleRepo,
-		queue:       worker.NewTaskQueue(rdb),
+		queue:       worker.NewTaskQueue(rdb, logger),
 		rdb:         rdb,
 		logger:      logger,
 	}
@@ -51,11 +51,7 @@ func (j *AISynthesisJob) Run(ctx context.Context) error {
 		return err
 	}
 
-	if len(groupedDrafts) == 0 {
-		log.Info("no pending drafts to synthesize")
-		return nil
-	}
-
+	// 1. Enqueue extraction tasks for pending drafts
 	enqueuedCount := 0
 	for ticker, drafts := range groupedDrafts {
 		log.Info("enqueuing articles for ticker", "ticker", ticker, "count", len(drafts))
@@ -71,16 +67,29 @@ func (j *AISynthesisJob) Run(ctx context.Context) error {
 				continue
 			}
 
-			// Update status in DB to avoid duplicate enqueuing
-			if err := j.articleRepo.MarkDraftsAsProcessed([]uint{d.ID}); err != nil { // reused method to set 'processed'... wait, should set 'extraction_queued'
-				// Let's use UpdateDraftAI for specific status
-			}
 			_ = j.articleRepo.UpdateDraftAI(d.ID, "", "extraction_queued")
 			enqueuedCount++
 		}
 	}
 
-	log.Info("ai_synthesis producer: finished", "total_enqueued", enqueuedCount)
+	// 2. NEW: Rescue abandoned tickers (like MBB with 36 extracted but no synthesis)
+	abandoned, err := j.articleRepo.GetTickersReadyForSynthesis()
+	if err != nil {
+		log.Error("failed to get abandoned tickers", "error", err)
+	} else {
+		for _, ticker := range abandoned {
+			log.Info("found abandoned ticker ready for synthesis, rescuing", "ticker", ticker)
+			task := &worker.Task{
+				Type:   worker.TaskSynthesize,
+				Ticker: ticker,
+			}
+			if err := j.queue.Enqueue(ctx, task); err != nil {
+				log.Error("failed to enqueue rescue synthesis task", "ticker", ticker, "error", err)
+			}
+		}
+	}
+
+	log.Info("ai_synthesis producer: finished", "total_enqueued", enqueuedCount, "rescued_tickers", len(abandoned))
 	return nil
 }
 

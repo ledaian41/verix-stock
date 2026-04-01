@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
-
-	"strconv"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/ledaian41/verix-stock/internal/modules/article"
@@ -23,9 +23,10 @@ type Synthesizer struct {
 	fallbackSynthesisModel *genai.GenerativeModel
 	rpmLimit               int
 	limiter                *rate.Limiter
+	logger                 *slog.Logger
 }
 
-func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
+func NewSynthesizer(ctx context.Context, logger *slog.Logger) (*Synthesizer, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("GEMINI_API_KEY not set")
@@ -43,7 +44,7 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 	}
 
 	// 1. Fact Extraction Model (Flash 2.0)
-	factModel := client.GenerativeModel("gemini-3.1-flash-lite")
+	factModel := client.GenerativeModel("gemini-3.1-flash-lite-preview")
 	factModel.SetTemperature(0.1)
 	factModel.ResponseMIMEType = "application/json"
 	factModel.ResponseSchema = &genai.Schema{
@@ -63,21 +64,21 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 	synthesisSchema := &genai.Schema{
 		Type: genai.TypeObject,
 		Properties: map[string]*genai.Schema{
-			"summary":         {Type: genai.TypeString, Description: "3-5 gạch đầu dòng ý chính, mỗi ý 1 dòng"},
-			"conclusion":      {Type: genai.TypeString, Description: "1 câu kết luận ngắn gọn, không kèm icon"},
+			"summary":         {Type: genai.TypeString, Description: "3-5 gạch đầu dòng ý chính, mỗi ý tối đa 15-20 từ, không lặp lại thông tin"},
+			"conclusion":      {Type: genai.TypeString, Description: "1 câu kết luận cực kỳ ngắn gọn (dưới 20 từ), không kèm icon"},
 			"sentiment_score": {Type: genai.TypeNumber},
 		},
 		Required: []string{"summary", "conclusion", "sentiment_score"},
 	}
 
 	// 2. High Quality Synthesis Model (Pro 1.5)
-	proSynthesisModel := client.GenerativeModel("gemini-3-flash")
+	proSynthesisModel := client.GenerativeModel("gemini-3-flash-preview")
 	proSynthesisModel.SetTemperature(0.1)
 	proSynthesisModel.ResponseMIMEType = "application/json"
 	proSynthesisModel.ResponseSchema = synthesisSchema
 
 	// 3. Fallback Synthesis Model (Flash 2.0)
-	fallbackSynthesisModel := client.GenerativeModel("gemini-3.1-flash-lite")
+	fallbackSynthesisModel := client.GenerativeModel("gemini-3.1-flash-lite-preview")
 	fallbackSynthesisModel.SetTemperature(0.1)
 	fallbackSynthesisModel.ResponseMIMEType = "application/json"
 	fallbackSynthesisModel.ResponseSchema = synthesisSchema
@@ -89,6 +90,7 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 		fallbackSynthesisModel: fallbackSynthesisModel,
 		rpmLimit:               rpm,
 		limiter:                rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), 1),
+		logger:                 logger.With("component", "synthesizer"),
 	}, nil
 }
 
@@ -134,8 +136,8 @@ func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, draft
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Hành động như một chuyên gia phân tích tài chính cao cấp. Hãy tóm tắt các tin tức mới nhất về mã cổ phiếu %s.\n\n", ticker))
 	sb.WriteString("Yêu cầu:\n")
-	sb.WriteString("1. Trường 'summary': Viết 3-5 gạch đầu dòng cô đọng, chuyên nghiệp.\n")
-	sb.WriteString("2. Trường 'conclusion': Viết 1 câu chốt ngắn gọn đại diện cho toàn bộ tin tức (không bao gồm emoji 📌).\n")
+	sb.WriteString("1. Trường 'summary': Viết 3-5 gạch đầu dòng cô đọng, chuyên nghiệp. Mỗi gạch đầu dòng tối đa 20 từ.\n")
+	sb.WriteString("2. Trường 'conclusion': Viết 1 câu chốt cực kỳ ngắn gọn (dưới 20 từ) đại diện cho toàn bộ tin tức (không bao gồm emoji 📌).\n")
 	sb.WriteString("3. Đưa ra điểm Sentiment từ -1.0 đến 1.0.\n")
 	sb.WriteString("4. Định dạng phản hồi: JSON.\n\n")
 
@@ -146,8 +148,22 @@ func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, draft
 	if err := s.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
-	resp, err := s.proSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
+
+	// Add timeout for synthesis
+	sCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	s.logger.Info("gemini synthesis start (full text)", "ticker", drafts[0].Ticker, "articles", len(drafts), "prompt_len", len(sb.String()))
+	start := time.Now()
+
+	resp, err := s.proSynthesisModel.GenerateContent(sCtx, genai.Text(sb.String()))
 	if err != nil {
+		if sCtx.Err() == context.DeadlineExceeded {
+			s.logger.Warn("gemini pro synthesis timeout, trying fallback", "ticker", drafts[0].Ticker)
+		} else {
+			s.logger.Warn("gemini pro synthesis error, trying fallback", "ticker", drafts[0].Ticker, "error", err)
+		}
+
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -160,6 +176,7 @@ func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, draft
 		}
 	}
 
+	s.logger.Info("gemini synthesis finished", "ticker", drafts[0].Ticker, "duration", time.Since(start))
 	return s.parseResponse(resp), nil
 }
 
@@ -173,8 +190,8 @@ func (s *Synthesizer) SynthesizeFromFacts(ctx context.Context, ticker string, fa
 	sb.WriteString("- Nếu các nguồn tin đưa ra số liệu hoặc nhận định trái ngược nhau, BẮT BUỘC phải nêu rõ sự đối lập (Ví dụ: 'Mặc dù A... nhưng B...').\n")
 	sb.WriteString("- Ưu tiên các dữ liệu có con số cụ thể.\n\n")
 	sb.WriteString("Yêu cầu đầu ra:\n")
-	sb.WriteString("1. Trường 'summary': 3-5 gạch đầu dòng tóm tắt tinh hoa.\n")
-	sb.WriteString("2. Trường 'conclusion': 1 câu kết luận cô đọng cuối cùng (không bao gồm emoji 📌).\n")
+	sb.WriteString("1. Trường 'summary': 3-5 gạch đầu dòng tóm tắt tinh hoa. Mỗi gạch đầu dòng tối đa 20 từ.\n")
+	sb.WriteString("2. Trường 'conclusion': 1 câu kết luận cực kỳ cô đọng (dưới 20 từ) cuối cùng (không bao gồm emoji 📌).\n")
 	sb.WriteString("3. Điểm Sentiment tổng hợp (-1.0 đến 1.0).\n")
 	sb.WriteString("4. Định dạng phản hồi: JSON.\n\n")
 
@@ -188,8 +205,22 @@ func (s *Synthesizer) SynthesizeFromFacts(ctx context.Context, ticker string, fa
 	if err := s.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
-	resp, err := s.proSynthesisModel.GenerateContent(ctx, genai.Text(sb.String()))
+
+	// Add timeout for synthesis from facts
+	sCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	s.logger.Info("gemini synthesis start (from facts)", "ticker", ticker, "facts_count", len(facts), "prompt_len", len(sb.String()))
+	start := time.Now()
+
+	resp, err := s.proSynthesisModel.GenerateContent(sCtx, genai.Text(sb.String()))
 	if err != nil {
+		if sCtx.Err() == context.DeadlineExceeded {
+			s.logger.Warn("gemini pro synthesis (facts) timeout, trying fallback", "ticker", ticker)
+		} else {
+			s.logger.Warn("gemini pro synthesis (facts) error, trying fallback", "ticker", ticker, "error", err)
+		}
+
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -202,6 +233,7 @@ func (s *Synthesizer) SynthesizeFromFacts(ctx context.Context, ticker string, fa
 		}
 	}
 
+	s.logger.Info("gemini synthesis finished", "ticker", ticker, "duration", time.Since(start))
 	return s.parseResponse(resp), nil
 }
 
@@ -219,9 +251,14 @@ Nội dung bài báo: %s`, d.Ticker, d.Title, d.FullContent)
 	if err := s.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
-	resp, err := s.factModel.GenerateContent(ctx, genai.Text(prompt))
+
+	sCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	s.logger.Debug("gemini extraction start", "ticker", d.Ticker, "article_id", d.ID)
+	resp, err := s.factModel.GenerateContent(sCtx, genai.Text(prompt))
 	if err != nil {
-		return nil, fmt.Errorf("factModel error: %v", err)
+		return nil, fmt.Errorf("factModel error (timeout? %v): %v", sCtx.Err() == context.DeadlineExceeded, err)
 	}
 
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {

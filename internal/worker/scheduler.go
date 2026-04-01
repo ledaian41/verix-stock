@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -39,6 +40,7 @@ type Scheduler struct {
 	pool           *Pool
 	logger         *slog.Logger
 	lastJobSuccess map[string]time.Time // when job last completed without error
+	jobEntries     map[string]JobEntry  // Store registered jobs for manual triggering
 	mu             sync.RWMutex
 }
 
@@ -48,6 +50,7 @@ func NewScheduler(concurrency int, logger *slog.Logger) *Scheduler {
 		pool:           NewPool(concurrency),
 		logger:         logger,
 		lastJobSuccess: make(map[string]time.Time),
+		jobEntries:     make(map[string]JobEntry),
 	}
 }
 
@@ -80,8 +83,30 @@ func (s *Scheduler) Register(entry JobEntry) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.jobEntries[entry.Job.Name()] = entry
+	s.mu.Unlock()
+
 	s.logger.Info("job registered", "job", entry.Job.Name(), "expr", entry.Expr, "id", id)
 	return nil
+}
+
+// RunJob executes a registered job manually by its name.
+func (s *Scheduler) RunJob(name string) error {
+	s.mu.RLock()
+	entry, ok := s.jobEntries[name]
+	s.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("job %s not found in scheduler", name)
+	}
+
+	timeout := entry.Timeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+
+	return s.runOnce(entry.Job, timeout)
 }
 
 func (s *Scheduler) runWithRetry(entry JobEntry, timeout time.Duration) {
