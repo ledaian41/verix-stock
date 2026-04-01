@@ -10,14 +10,11 @@ import (
 
 	"strconv"
 
-
 	"github.com/google/generative-ai-go/genai"
 	"github.com/ledaian41/verix-stock/internal/modules/article"
 	"golang.org/x/time/rate"
 	"google.golang.org/api/option"
 )
-
-
 
 type Synthesizer struct {
 	client                 *genai.Client
@@ -27,8 +24,6 @@ type Synthesizer struct {
 	rpmLimit               int
 	limiter                *rate.Limiter
 }
-
-
 
 func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
@@ -47,10 +42,8 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 		rpm = 12 // Default safe limit for Free Tier (15 RPM)
 	}
 
-
-
 	// 1. Fact Extraction Model (Flash 2.0)
-	factModel := client.GenerativeModel("gemini-2.0-flash")
+	factModel := client.GenerativeModel("gemini-3.1-flash-lite")
 	factModel.SetTemperature(0.1)
 	factModel.ResponseMIMEType = "application/json"
 	factModel.ResponseSchema = &genai.Schema{
@@ -78,13 +71,13 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 	}
 
 	// 2. High Quality Synthesis Model (Pro 1.5)
-	proSynthesisModel := client.GenerativeModel("gemini-1.5-pro")
+	proSynthesisModel := client.GenerativeModel("gemini-3-flash")
 	proSynthesisModel.SetTemperature(0.1)
 	proSynthesisModel.ResponseMIMEType = "application/json"
 	proSynthesisModel.ResponseSchema = synthesisSchema
 
 	// 3. Fallback Synthesis Model (Flash 2.0)
-	fallbackSynthesisModel := client.GenerativeModel("gemini-2.0-flash")
+	fallbackSynthesisModel := client.GenerativeModel("gemini-3.1-flash-lite")
 	fallbackSynthesisModel.SetTemperature(0.1)
 	fallbackSynthesisModel.ResponseMIMEType = "application/json"
 	fallbackSynthesisModel.ResponseSchema = synthesisSchema
@@ -98,9 +91,6 @@ func NewSynthesizer(ctx context.Context) (*Synthesizer, error) {
 		limiter:                rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), 1),
 	}, nil
 }
-
-
-
 
 func (s *Synthesizer) Close() {
 	s.client.Close()
@@ -140,7 +130,6 @@ func (s *Synthesizer) Synthesize(ctx context.Context, ticker string, drafts []ar
 	return s.SynthesizeFromFacts(ctx, ticker, facts)
 }
 
-
 func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, drafts []article.DraftArticle) (*SynthesisResult, error) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Hành động như một chuyên gia phân tích tài chính cao cấp. Hãy tóm tắt các tin tức mới nhất về mã cổ phiếu %s.\n\n", ticker))
@@ -170,7 +159,6 @@ func (s *Synthesizer) synthesizeDirect(ctx context.Context, ticker string, draft
 			return nil, err
 		}
 	}
-
 
 	return s.parseResponse(resp), nil
 }
@@ -213,7 +201,6 @@ func (s *Synthesizer) SynthesizeFromFacts(ctx context.Context, ticker string, fa
 			return nil, err
 		}
 	}
-
 
 	return s.parseResponse(resp), nil
 }
