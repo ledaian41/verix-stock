@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ledaian41/verix-stock/internal/core/ai"
@@ -68,7 +69,7 @@ func (w *QueueWorker) Start(ctx context.Context) {
 					if task.Type == TaskExtract && task.ArticleID > 0 {
 						w.logger.Warn("task exhausted retries, marking as failed in DB", "article_id", task.ArticleID)
 						_ = w.repo.UpdateDraftAI(task.ArticleID, "", "failed")
-						
+
 						// After marking as failed, we should still check if this ticker's batch is "done"
 						// to trigger synthesis even with failures.
 						w.checkAndTriggerSynthesis(ctx, task.Ticker)
@@ -117,14 +118,13 @@ func (w *QueueWorker) handleExtract(ctx context.Context, task *Task, log *slog.L
 	}
 
 	factJSON, _ := json.Marshal(res)
-	
+
 	// 3. Update DB
 	if err := w.repo.UpdateDraftAI(d.ID, string(factJSON), "extracted"); err != nil {
 		return err
 	}
 
 	log.Info("extracted facts for article", "id", d.ID)
-
 
 	// 4. Check if all articles for this ticker are done
 	incomplete, err := w.repo.CountIncompleteDraftsByTicker(task.Ticker)
@@ -188,7 +188,7 @@ func (w *QueueWorker) handleSynthesize(ctx context.Context, task *Task, log *slo
 	pub := &article.PublishedArticle{
 		Ticker:         task.Ticker,
 		Title:          fmt.Sprintf("[%s] %s - %s", task.Ticker, sessionName, time.Now().Format("02/01/2006")),
-		Summary:        res.Summary,
+		Summary:        formatArticleSummary(res.Summary),
 		Conclusion:     res.Conclusion,
 		SentimentScore: res.SentimentScore,
 		ArticleCount:   len(drafts),
@@ -210,10 +210,20 @@ func (w *QueueWorker) handleSynthesize(ctx context.Context, task *Task, log *slo
 	if err := w.repo.DeleteDraftsByTicker(task.Ticker); err != nil {
 		log.Error("failed to cleanup drafts", "error", err)
 	}
-	
+
 	log.Info("✅ synthesis completed and drafts cleaned up")
 	return nil
 }
 
-
-
+func formatArticleSummary(s string) string {
+	parts := strings.Split(s, "-")
+	var lines []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		lines = append(lines, "- "+p)
+	}
+	return strings.Join(lines, "\n")
+}
