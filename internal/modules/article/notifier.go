@@ -45,7 +45,7 @@ func (n *TelegramNotifier) Notify(ctx context.Context, pub PublishedArticle) err
 	msg := fmt.Sprintf(
 		"%s\n%s\n"+
 			"<b>%s ĐIỂM TIN CHÍNH: (%d tin mới)</b>\n%s"+
-			"<b>📌 Tóm tắt:</b> %s",
+			"<b>📌 Tóm tắt:</b>\n%s",
 		header,
 		separator,
 		icon,
