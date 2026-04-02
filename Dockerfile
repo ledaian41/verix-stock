@@ -2,7 +2,7 @@
 FROM golang:1.25-alpine AS builder
 
 # Install system dependencies
-RUN apk add --no-cache ca-certificates git
+RUN apk add --no-cache ca-certificates git tzdata
 
 WORKDIR /build
 
@@ -24,6 +24,8 @@ FROM scratch
 
 # Copy CA certs for outbound HTTPS (essential for scraping and Telegram)
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
 # Copy binaries from builder
 COPY --from=builder /verix-api /verix-api
