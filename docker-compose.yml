@@ -18,6 +18,8 @@ services:
     image: ghcr.io/ledaian41/verix-stock:latest
     entrypoint: [ "/verix-worker" ]
     env_file: .env
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
     depends_on:
       db:
         condition: service_healthy
