@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -45,8 +46,18 @@ type Scheduler struct {
 }
 
 func NewScheduler(concurrency int, logger *slog.Logger) *Scheduler {
+	tz := os.Getenv("APP_TIMEZONE")
+	if tz == "" {
+		tz = "Local"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		logger.Error("failed to load timezone, falling back to Local", "timezone", tz, "error", err)
+		loc = time.Local
+	}
+
 	return &Scheduler{
-		c:              cron.New(cron.WithSeconds()),
+		c:              cron.New(cron.WithSeconds(), cron.WithLocation(loc)),
 		pool:           NewPool(concurrency),
 		logger:         logger,
 		lastJobSuccess: make(map[string]time.Time),

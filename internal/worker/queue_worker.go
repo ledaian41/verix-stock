@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -178,22 +179,29 @@ func (w *QueueWorker) handleSynthesize(ctx context.Context, task *Task, log *slo
 	sourcesJSON, _ := json.Marshal(sources)
 
 	// 3. Create Published Article
+	tz := os.Getenv("APP_TIMEZONE")
+	loc, _ := time.LoadLocation(tz)
+	if loc == nil {
+		loc = time.Local
+	}
+	now := time.Now().In(loc)
+
 	sessionName := "Market Digest"
-	if time.Now().Hour() < 12 {
+	if now.Hour() < 12 {
 		sessionName = "Morning Digest"
-	} else if time.Now().Hour() >= 15 {
+	} else if now.Hour() >= 15 {
 		sessionName = "Afternoon Wrapup"
 	}
 
 	pub := &article.PublishedArticle{
 		Ticker:         task.Ticker,
-		Title:          fmt.Sprintf("[%s] %s - %s", task.Ticker, sessionName, time.Now().Format("02/01/2006")),
+		Title:          fmt.Sprintf("[%s] %s - %s", task.Ticker, sessionName, now.Format("02/01/2006")),
 		Summary:        formatArticleSummary(res.Summary),
 		Conclusion:     res.Conclusion,
 		SentimentScore: res.SentimentScore,
 		ArticleCount:   len(drafts),
 		Sources:        string(sourcesJSON),
-		PublishedAt:    time.Now(),
+		PublishedAt:    now,
 	}
 
 	if err := w.repo.CreatePublished(pub); err != nil {
