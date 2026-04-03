@@ -51,3 +51,11 @@ func (r *Repository) GetAllUniqueSymbols() ([]string, error) {
 		Pluck("symbol", &symbols).Error
 	return symbols, err
 }
+// GetChatIDsBySymbol retrieves all chat IDs that are watching a specific ticker.
+func (r *Repository) GetChatIDsBySymbol(symbol string) ([]int64, error) {
+	var chatIDs []int64
+	err := r.db.Model(&StockConfig{}).
+		Where("? = ANY(symbols)", symbol).
+		Pluck("chat_id", &chatIDs).Error
+	return chatIDs, err
+}

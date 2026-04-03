@@ -71,7 +71,7 @@ func main() {
 
 
 	// 3. Realtime Notification Subscriber
-	notifier := article.NewTelegramNotifier()
+	notifier := article.NewTelegramNotifier(watchlistRepo)
 	go func() {
 		ctx := context.Background()
 		ch := pubsub.Subscribe(ctx, "article.published")

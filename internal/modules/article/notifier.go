@@ -10,26 +10,49 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/ledaian41/verix-stock/internal/modules/watchlist"
 )
 
 type TelegramNotifier struct {
-	token  string
-	chatID string
+	token     string
+	backupID  string
+	watchlist *watchlist.Repository
 }
 
-func NewTelegramNotifier() *TelegramNotifier {
+func NewTelegramNotifier(wl *watchlist.Repository) *TelegramNotifier {
 	return &TelegramNotifier{
-		token:  os.Getenv("TELEGRAM_BOT_TOKEN"),
-		chatID: os.Getenv("TELEGRAM_CHAT_ID"),
+		token:     os.Getenv("TELEGRAM_BOT_TOKEN"),
+		backupID:  os.Getenv("TELEGRAM_CHAT_ID"),
+		watchlist: wl,
 	}
 }
 
 func (n *TelegramNotifier) Notify(ctx context.Context, pub PublishedArticle) error {
-	if n.token == "" || n.chatID == "" {
-		return fmt.Errorf("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set")
+	if n.token == "" {
+		return fmt.Errorf("TELEGRAM_BOT_TOKEN not set")
 	}
 
-	// 1. Determine Icon based on Sentiment Score
+	// 1. Get all recipients (Watchlist + Backup)
+	recipients := make(map[string]bool)
+	if n.backupID != "" {
+		recipients[n.backupID] = true
+	}
+
+	if n.watchlist != nil {
+		chatIDs, err := n.watchlist.GetChatIDsBySymbol(pub.Ticker)
+		if err == nil {
+			for _, id := range chatIDs {
+				recipients[fmt.Sprintf("%d", id)] = true
+			}
+		}
+	}
+
+	if len(recipients) == 0 {
+		return fmt.Errorf("no recipients found (watchlist empty and TELEGRAM_CHAT_ID not set)")
+	}
+
+	// 2. Determine Icon based on Sentiment Score
 	icon := "⚠️" // Neutral
 	if pub.SentimentScore >= 0.3 {
 		icon = "✅" // Positive
@@ -37,7 +60,7 @@ func (n *TelegramNotifier) Notify(ctx context.Context, pub PublishedArticle) err
 		icon = "❌" // Negative
 	}
 
-	// 2. Format Message Template
+	// 3. Format Message Template
 	tickerHTML := fmt.Sprintf("<code>%s</code>", strings.ToUpper(pub.Ticker))
 	header := fmt.Sprintf("🚀 <b>TIN CỔ PHIẾU</b> %s - <b>%s</b>", tickerHTML, strings.ToUpper(time.Now().Format("02/01/2006")))
 	separator := "───────────────────"
@@ -54,30 +77,35 @@ func (n *TelegramNotifier) Notify(ctx context.Context, pub PublishedArticle) err
 		html.EscapeString(pub.Conclusion),
 	)
 
-	// 3. Send to Telegram API
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", n.token)
-	payload := map[string]interface{}{
-		"chat_id":    n.chatID,
-		"text":       msg,
-		"parse_mode": "HTML", // Switched to HTML for stability
+	// 4. Send to all recipients
+	var lastErr error
+	for chatID := range recipients {
+		url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", n.token)
+		payload := map[string]interface{}{
+			"chat_id":    chatID,
+			"text":       msg,
+			"parse_mode": "HTML",
+		}
+
+		body, _ := json.Marshal(payload)
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(body))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("telegram api error for %s: status %d", chatID, resp.StatusCode)
+		}
 	}
 
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("telegram api error: status %d", resp.StatusCode)
-	}
-
-	return nil
+	return lastErr
 }
