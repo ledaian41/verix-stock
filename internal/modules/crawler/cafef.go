@@ -3,6 +3,7 @@ package crawler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -26,7 +27,8 @@ func (f *cafeFFetcher) Name() string {
 	return f.name
 }
 
-func (f *cafeFFetcher) Fetch(ctx context.Context, ticker string, since time.Time) ([]ScrapedArticle, error) {
+func (f *cafeFFetcher) Fetch(ctx context.Context, logger *slog.Logger, ticker string, since time.Time) ([]ScrapedArticle, error) {
+	logger.Info("fetching articles from CafeF", "since", since.Format("2006-01-02 15:04"))
 	var articles []ScrapedArticle
 	var mu sync.Mutex
 
@@ -53,7 +55,10 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, ticker string, since time.Time
 		}
 		description := e.ChildText(".sapo")
 		
-		publishedAt := time.Now()
+		// Initial extraction from link (may be unreliable but fast for skipping)
+		publishedAt := time.Time{} // Default to zero time
+		dateExtracted := false
+
 		matches := dateRegex.FindStringSubmatch(link)
 		if len(matches) >= 4 {
 			yearStr := "20" + matches[1]
@@ -70,27 +75,63 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, ticker string, since time.Time
 			t, err := time.ParseInLocation("2006-01-02 15:04:05", yearStr+"-"+monthStr+"-"+dayStr+" "+hourStr+":"+minStr+":"+secStr, ict)
 			if err == nil {
 				publishedAt = t
+				dateExtracted = true
 			}
 		}
 
-		// Stop adding if the article is older than 'since'
-		if publishedAt.Before(since) {
+		// Optimization: if we extracted a date from URL and it's definitely older than 'since', skip NOW
+		if dateExtracted && publishedAt.Before(since) {
 			return
 		}
 
-		// Visit the article page to get FULL content
+		// FINAL FILTER: Check if we have a valid date and if it's within the requested range
+		if !dateExtracted {
+			logger.Debug("skipping article: could not extract date", "title", title, "link", link)
+			return
+		}
+
+		if publishedAt.Before(since) {
+			logger.Debug("skipping article: older than threshold", 
+				"title", title, 
+				"published_at", publishedAt.Format("2006-01-02 15:04"),
+				"threshold", since.Format("2006-01-02 15:04"))
+			return
+		}
+
+		// Visit the article page to get FULL content and precise date
 		fullContent := ""
 		detailCollector := c.Clone()
+		
+		// Priority extraction from .pdate
+		detailCollector.OnHTML(".pdate, [data-role='publishdate']", func(de *colly.HTMLElement) {
+			dateStr := strings.TrimSpace(de.Text) // Example: "09-03-2026 - 01:04 AM"
+			// Try to parse using the format provided by user
+			t, err := time.ParseInLocation("02-01-2006 - 03:04 PM", dateStr, ict)
+			if err == nil {
+				publishedAt = t
+				dateExtracted = true
+			}
+		})
+
 		detailCollector.OnHTML(".left_detail, .content_detail, #content", func(de *colly.HTMLElement) {
 			// Remove script and style tags
 			de.DOM.Find("script, style, .social_media, .related_news").Remove()
-			fullContent = strings.TrimSpace(de.Text)
+			if fullContent == "" {
+				fullContent = strings.TrimSpace(de.Text)
+			}
 		})
 		
 		err := detailCollector.Visit(link)
 		if err != nil {
-			// If failed to visit detail, we still keep the article but with empty content
-			// or we can skip it. Let's keep it for now.
+			logger.Warn("failed to visit article detail", "link", link, "error", err)
+		}
+
+		// Re-check date after detail visit just in case the URL date was wrong but pdate corrected it
+		if publishedAt.Before(since) {
+			logger.Debug("skipping article: older than threshold (confirmed path)", 
+				"title", title, 
+				"published_at", publishedAt.Format("2006-01-02 15:04"))
+			return
 		}
 
 		mu.Lock()
@@ -104,6 +145,8 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, ticker string, since time.Time
 			PublishedAt:  publishedAt,
 		})
 		mu.Unlock()
+
+		logger.Info("found new article", "title", title, "published_at", publishedAt.Format("2006-01-02 15:04"))
 	})
 
 	// Fetch up to 3 pages
@@ -115,20 +158,22 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, ticker string, since time.Time
 			searchURL = fmt.Sprintf("https://cafef.vn/tim-kiem/trang-%d.chn?keywords=%s", page, strings.ToUpper(ticker))
 		}
 
+		logger.Info("visiting search page", "page", page, "url", searchURL)
 		preFetchCount := len(articles)
 		err := c.Visit(searchURL)
 		if err != nil {
+			logger.Error("failed to visit search page", "page", page, "error", err)
 			break
 		}
 
 		// Optimization: if no new articles were added on this page AND we visited some items,
 		// it likely means they were all older than 'since'. We can stop.
-		// Note: 'articles' is appended inside OnHTML.
 		if len(articles) == preFetchCount {
-			// Check if we hit the 'since' limit or just no results
+			logger.Info("no new articles on this page, stopping search", "page", page)
 			break
 		}
 	}
 
+	logger.Info("fetch completed", "total_new_articles", len(articles))
 	return articles, nil
 }

@@ -2,6 +2,7 @@ package crawler
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 type Fetcher interface {
 	// Fetch retrieves recent articles from the source for a specific ticker.
 	// It stops if it encounters articles older than the 'since' time.
-	Fetch(ctx context.Context, ticker string, since time.Time) ([]ScrapedArticle, error)
+	Fetch(ctx context.Context, logger *slog.Logger, ticker string, since time.Time) ([]ScrapedArticle, error)
 	// Name returns the identifier of the news source.
 	Name() string
 }
@@ -23,7 +24,7 @@ type Crawler interface {
 	Register(fetcher Fetcher)
 	// Crawl executes registered fetchers concurrently for a list of tickers.
 	// Each ticker search can specify a 'since' time to limit results.
-	Crawl(ctx context.Context, tickers map[string]time.Time) ([]ScrapedArticle, error)
+	Crawl(ctx context.Context, logger *slog.Logger, tickers map[string]time.Time) ([]ScrapedArticle, error)
 }
 
 type manager struct {
@@ -43,7 +44,7 @@ func (m *manager) Register(fetcher Fetcher) {
 	m.fetchers = append(m.fetchers, fetcher)
 }
 
-func (m *manager) Crawl(ctx context.Context, tickers map[string]time.Time) ([]ScrapedArticle, error) {
+func (m *manager) Crawl(ctx context.Context, logger *slog.Logger, tickers map[string]time.Time) ([]ScrapedArticle, error) {
 	var (
 		mu       sync.Mutex
 		articles []ScrapedArticle
@@ -57,11 +58,13 @@ func (m *manager) Crawl(ctx context.Context, tickers map[string]time.Time) ([]Sc
 			ticker := ticker // capture loop variable
 			since := since   // capture loop variable
 			fetcher := f
+			l := logger.With("ticker", ticker, "source", f.Name())
 
 			g.Go(func() error {
-				results, err := fetcher.Fetch(ctx, ticker, since)
+				results, err := fetcher.Fetch(ctx, l, ticker, since)
 				if err != nil {
 					// We might want to log this but continue with other fetchers
+					l.Error("fetcher failed", "error", err)
 					return nil
 				}
 

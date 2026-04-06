@@ -77,11 +77,11 @@ func (j *ArticleFetchJob) Run(ctx context.Context) error {
 
 	// 2. Prepare ticker map with latest dates from Metadata table
 	tickerMap := make(map[string]time.Time)
-	now := time.Now()
-	window := 24 * time.Hour
-	if now.Weekday() == time.Monday {
-		window = 72 * time.Hour
-	}
+	ict := time.FixedZone("ICT", 7*3600)
+	now := time.Now().In(ict)
+	
+	// Default window is 72 hours as requested by user to capture recent content
+	window := 72 * time.Hour
 	sinceThreshold := now.Add(-window)
 
 	for _, s := range symbols {
@@ -91,7 +91,8 @@ func (j *ArticleFetchJob) Run(ctx context.Context) error {
 			lastDate = sinceThreshold
 		}
 
-		// Ensure we don't crawl older than our window (24h/72h)
+		// Use the metadata date if it's more recent than our 72h window,
+		// otherwise use the 72h window to satisfy the "within 72 hours" requirement.
 		if lastDate.Before(sinceThreshold) {
 			lastDate = sinceThreshold
 		}
@@ -100,7 +101,7 @@ func (j *ArticleFetchJob) Run(ctx context.Context) error {
 	}
 
 	// 3. Crawl articles (now with Deep Extraction from previous change)
-	scraped, err := j.crawler.Crawl(ctx, tickerMap)
+	scraped, err := j.crawler.Crawl(ctx, log, tickerMap)
 	if err != nil {
 		log.Error("crawling failed", "error", err)
 		return err
