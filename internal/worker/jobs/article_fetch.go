@@ -114,6 +114,16 @@ func (j *ArticleFetchJob) Run(ctx context.Context) error {
 	tickerUpdateMap := make(map[string]time.Time)
 
 	for _, s := range scraped {
+		// DEDUPLICATION: Check Redis across multiple runs
+		seenKey := "crawler:seen:" + s.Link
+		isNew, err := j.rdb.SetNX(ctx, seenKey, "1", 7*24*time.Hour).Result()
+		if err != nil {
+			log.Warn("redis error on deduplication", "url", s.Link, "error", err)
+		} else if !isNew {
+			log.Debug("article already crawled across runs, skipping", "url", s.Link)
+			continue
+		}
+
 		art := &article.DraftArticle{
 			Ticker:      s.TargetTicker,
 			Source:      s.Source,
@@ -127,6 +137,8 @@ func (j *ArticleFetchJob) Run(ctx context.Context) error {
 
 		if err := j.articleRepo.CreateDraft(art); err != nil {
 			log.Warn("failed to save draft article", "url", s.Link, "error", err)
+			// Revert the redis key so we can retry next time
+			j.rdb.Del(ctx, seenKey)
 			continue
 		}
 		newCount++

@@ -31,6 +31,7 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, logger *slog.Logger, ticker st
 	logger.Info("fetching articles from CafeF", "since", since.Format("2006-01-02 15:04"))
 	var articles []ScrapedArticle
 	var mu sync.Mutex
+	seenLinks := make(map[string]bool)
 
 	c := colly.NewCollector(
 		colly.AllowedDomains("cafef.vn"),
@@ -58,6 +59,15 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, logger *slog.Logger, ticker st
 		// Initial extraction from link (may be unreliable but fast for skipping)
 		publishedAt := time.Time{} // Default to zero time
 		dateExtracted := false
+
+		// Deduplicate in the same run to save network requests
+		mu.Lock()
+		if seenLinks[link] {
+			mu.Unlock()
+			return
+		}
+		seenLinks[link] = true
+		mu.Unlock()
 
 		matches := dateRegex.FindStringSubmatch(link)
 		if len(matches) >= 4 {
@@ -113,9 +123,9 @@ func (f *cafeFFetcher) Fetch(ctx context.Context, logger *slog.Logger, ticker st
 			}
 		})
 
-		detailCollector.OnHTML(".left_detail, .content_detail, #content", func(de *colly.HTMLElement) {
-			// Remove script and style tags
-			de.DOM.Find("script, style, .social_media, .related_news").Remove()
+		detailCollector.OnHTML("[data-role='content'], .detail-content, .contentdetail, .left_detail, .content_detail, #content", func(de *colly.HTMLElement) {
+			// Remove script, style tags and various noise elements (ads, social, related news, tags)
+			de.DOM.Find("script, style, .social_media, .related_news, .social-r, .tagdetail, .tindnd, #admzone480458, .link-content-footer, .box-trait-tin, #listNewsInContent, .title_box").Remove()
 			if fullContent == "" {
 				fullContent = strings.TrimSpace(de.Text)
 			}
